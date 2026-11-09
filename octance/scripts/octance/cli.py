@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .core import CLAIM_KINDS, CLAIM_STATUSES, EVIDENCE_TYPES, Ledger, OctanceError, Project, canonical, diagnose_project, discover_root, init_project, resolve_project_root
+from .polygraph import build_dependency_graph
 from .source import locate_suspects, source_inventory
 
 EXIT_PERMISSION = 3
@@ -132,6 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
     locate.add_argument("--max-files", type=int, default=100000)
     locate.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
     _common(locate)
+
+    graph = commands.add_parser("graph", help="build a bounded best-effort internal file dependency graph")
+    graph.add_argument("--max-files", type=int, default=100000)
+    graph.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
+    graph.add_argument("--max-total-bytes", type=int, default=100 * 1024 * 1024)
+    _common(graph)
     return parser
 
 
@@ -200,7 +207,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         raise OctanceError("agent identity is not registered", 3, "permission_denied")
     connection = project.ledger.connect()
     try:
-        if args.command in {"status", "verify-log", "rebuild", "languages", "locate"}:
+        if args.command in {"status", "verify-log", "rebuild", "languages", "locate", "graph"}:
             project.ledger._require(connection, actor, "status")
     finally:
         connection.close()
@@ -245,6 +252,12 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         try:
             result = locate_suspects(root, trace_text, args.query, args.limit,
                                      args.max_files, args.max_file_bytes)
+        except ValueError as error:
+            raise OctanceError(str(error), 2, "invalid_input")
+        return _response(result)
+    if args.command == "graph":
+        try:
+            result = build_dependency_graph(root, args.max_files, args.max_file_bytes, args.max_total_bytes)
         except ValueError as error:
             raise OctanceError(str(error), 2, "invalid_input")
         return _response(result)

@@ -54,7 +54,13 @@ After you run an approved test using the host's authorized tools, save its plain
 python3 scripts/octance.py locate --trace-file .octance/failure.log --query "parse request"
 ```
 
-This currently recognizes common frame formats for Python, JavaScript/TypeScript, Go, Java, Rust, and C/C++. The inventory supports a broader extension list, applies count/size limits, skips common vendor/generated directories, and reports unsupported extensions. Neither command modifies source or executes project code. `locate` is heuristic file ranking, not a root-cause result; see [`docs/implementation-and-limitations.md`](docs/implementation-and-limitations.md) for the synthetic benchmark and its limits.
+This currently recognizes common frame formats for Python, JavaScript/TypeScript, Go, Java, Rust, and C/C++. The inventory supports a broader extension list, applies count/size limits, skips common vendor/generated directories, and reports unsupported extensions. `graph` extracts bounded internal file dependencies from Python imports and common import/include forms in JavaScript/TypeScript, Go, Java, Rust, C/C++, C#, PHP, Ruby, Kotlin, and Scala:
+
+```sh
+python3 scripts/octance.py graph
+```
+
+This is not a full parser: only Python uses the standard-library AST; other languages use conservative textual patterns, so imports may be missed or misresolved. The graph is a best-effort dependency map, not a complete call graph or proof of runtime reachability. These commands do not modify source or execute project code. `locate` is heuristic file ranking, not a root-cause result; see [`docs/implementation-and-limitations.md`](docs/implementation-and-limitations.md) for the synthetic benchmark and its limits.
 
 ## Data and safety
 

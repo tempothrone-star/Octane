@@ -220,7 +220,8 @@ class OpenClawBridgeTests(unittest.TestCase):
         current_skill = (root / "octance" / "SKILL.md").read_text(encoding="utf-8")
         self.assertTrue(current_skill.startswith("---\nname: octance\n"))
         self.assertIn("does not grant filesystem or shell access", current_skill)
-        self.assertIn("does not implement `check`, `explore`, or `locate`", current_skill)
+        self.assertIn("does not yet implement a predeclared replayable check runner", current_skill)
+        self.assertIn("`locate` is heuristic", current_skill)
         self.assertTrue(json.loads((root / "package.json").read_text(encoding="utf-8"))["private"])
 
 

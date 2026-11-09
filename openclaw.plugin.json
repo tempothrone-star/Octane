@@ -1,0 +1,76 @@
+{
+  "id": "octane",
+  "name": "Octane",
+  "description": "Persistent, provenance-aware project intelligence and investigation tools for OpenClaw.",
+  "categories": ["developer-tools"],
+  "contracts": {
+    "tools": [
+      "octane_project",
+      "octane_context",
+      "octane_scan",
+      "octane_evidence",
+      "octane_memory",
+      "octane_agents",
+      "octane_audit",
+      "octane_investigation",
+      "octane_graph",
+      "octane_hypothesis",
+      "octane_schedule",
+      "octane_workspace"
+    ]
+  },
+  "toolMetadata": {
+    "octane_project": { "optional": true },
+    "octane_context": { "optional": true },
+    "octane_scan": { "optional": true },
+    "octane_evidence": { "optional": true },
+    "octane_memory": { "optional": true },
+    "octane_agents": { "optional": true },
+    "octane_audit": { "optional": true },
+    "octane_investigation": { "optional": true },
+    "octane_graph": { "optional": true },
+    "octane_hypothesis": { "optional": true },
+    "octane_schedule": { "optional": true },
+    "octane_workspace": { "optional": true }
+  },
+  "skills": ["./openclaw/skills"],
+  "activation": { "onStartup": true },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["allowedProjectRoots"],
+    "properties": {
+      "allowedProjectRoots": {
+        "type": "array",
+        "minItems": 1,
+        "items": { "type": "string", "minLength": 1 },
+        "description": "Absolute existing directories Octane is permitted to register and inspect."
+      },
+      "allowedDockerImages": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 },
+        "description": "Optional exact allowlist of trusted Docker images. Workspace command execution is denied unless the selected image appears here. Pin reviewed images by digest where possible."
+      },
+      "allowAgentProvisioning": {
+        "type": "boolean",
+        "default": false,
+        "description": "Explicitly permit agent creation using fixed reader, explorer, investigator, or verifier permission presets."
+      },
+      "databasePath": {
+        "type": "string",
+        "minLength": 1,
+        "description": "SQLite database path; defaults under OPENCLAW_STATE_DIR/octane."
+      },
+      "workspaceRoot": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Disposable snapshots directory; defaults under OPENCLAW_STATE_DIR/octane/workspaces."
+      },
+      "pythonExecutable": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Python 3.11+ executable; defaults to python3 (python on Windows)."
+      }
+    }
+  }
+}

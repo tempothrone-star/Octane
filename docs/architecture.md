@@ -1,0 +1,49 @@
+# Octance Phase 1 architecture
+
+## Product boundary
+
+The product is the portable OpenClaw skill in `octance/`: a concise workflow plus a deterministic Python CLI. The CLI has no model SDK, makes no network calls, and uses only Python 3.9+ standard-library modules. OpenClaw's host agent supplies reasoning; its configured tools and sandbox policy determine whether the CLI can read a project or execute.
+
+The skill directory contains `SKILL.md`, a self-contained `scripts/` implementation, and numbered SQL migrations. `scripts/octance.py` at the repository root is a development convenience wrapper that invokes the bundled skill CLI.
+
+## Project layout and identity
+
+Each analyzed root stores runtime state under `.octance/`:
+
+- `octance.db`: SQLite WAL database, schema version 1.
+- `project.json`: project UUID, canonical root, and a last-committed log-head anchor.
+- `config.json`: default trust tier and an initially empty execution allowlist reserved for later phases.
+
+Initialization chooses `git rev-parse --show-toplevel` when Git is available; otherwise it uses the requested/current directory. All commands discover the nearest initialized root, compare its canonical path and project UUID with both the database and JSON metadata, and refuse if they disagree. `.gitignore` is never changed unless `init --update-gitignore` is explicitly provided. The repository itself is never used as a test project; tests initialize temporary roots.
+
+The revision recorded with evidence and claims is a SHA-256 digest of relative file paths and file bytes, excluding `.git`, `.octance`, and common generated/cache directories. No file contents are stored in the database. Git is optional and the hash fallback needs no Git command.
+
+## Append-only ledger
+
+Every phase-1 write appends an event containing sequence, project, agent, operation, canonical JSON payload, idempotency key, previous hash, and UTC timestamp. The hash is SHA-256 over the previous hash concatenated with canonical JSON for the event without its hash. The log has SQLite update/delete triggers; verification checks sequence continuity, project identity, predecessor links, event hashes, and the external `project.json` head anchor. `verify-log` detects edits, deletions, and reordering in tests.
+
+The anchor is updated after a committed event. As this update spans a database and a JSON file, a process interruption can leave it behind the database head; a verified anchor prefix is accepted. This is tamper evidence, not tamper prevention: an operator with raw shell access can alter the database and the anchor. SQLite permissions are cooperative guardrails, not a security boundary.
+
+Idempotency keys supplied by callers are honored. Otherwise the CLI derives a deterministic SHA-256 key from agent, operation, and canonical request payload. A retry returns the original event record; reuse of an explicit key for different content is rejected. Counters allocate `EV-0001` and `CL-0001` transactionally per project. Agent IDs use `AG-<name>`; initialization creates `AG-owner` with the local admin role.
+
+Materialized project, agent, evidence, claim, link, and counter tables are written in the same `BEGIN IMMEDIATE` transaction as their event. `rebuild --check` replays supported phase-1 event types into an expected view and compares it to the live tables. It is a comparison only; a mutating rebuild is not implemented.
+
+## Evidence and claims
+
+Evidence and claims are distinct. Evidence is immutable and carries agent, type, description, structured payload, content hash, UTC time, revision, optional relative file/symbol/line range, method, verification status, and redaction count. Phase 1 accepts only `unverified` evidence; no command can mark evidence executed or replayed. Evidence links are append-only events.
+
+Claims use the kinds `observation`, `inference`, `hypothesis`, `intent`, `decision`, `requirement`, `limitation`, and `open_question`. They cite supporting/contradicting evidence and dependencies, carry a revision and a derived ordinal evidence basis, and have no numeric confidence. Low-trust agents' claims enter as `quarantined` and are excluded from `brief`. Claim status and text cannot be updated or deleted in phase 1; corrections require a new record/link. Only event reducers and CLI validators write the materialized tables; raw database access can bypass those cooperative rules.
+
+Common secret-like keys and values are redacted during evidence and claim ingest. This is best-effort pattern filtering, not a credential scanner or guarantee; users should not supply credentials. `brief` ranks keyword matches, includes open questions as unknowns, excludes quarantined claims, and obeys an estimated token budget of characters divided by four. It is not semantic retrieval. FTS5 is probed by `doctor` but phase-1 search uses bounded SQLite `LIKE` queries.
+
+## SQLite and filesystem
+
+Connections enable foreign keys and a 5-second busy timeout. The database uses WAL and numbered transactional migrations. The CLI refuses a schema version newer than itself. `doctor` checks Python/SQLite versions, FTS5 availability, journal mode, log integrity, Git presence, and filesystem type where it can be detected. SQLite WAL is unsupported on some network filesystems; on platforms or mounts that cannot be identified, `doctor` warns rather than assuming local storage. Wall-clock timestamps are UTC ISO-8601; leases are not implemented yet, so clock-skew behavior remains future work.
+
+No project command execution, network access, telemetry, patch application, or source modification exists in Phase 1. The skill cannot guarantee shell isolation. OpenClaw's sandbox is off by default and configured separately; `exec` may run on the Gateway host unless policy routes it to a sandbox. Operators should restrict tools and configure sandbox workspace access appropriately.
+
+## Phase status
+
+Implemented: setup, project identity checks, owner and fixed-role agent registration, evidence/claim ingest and retrieval, secret redaction, hash-chain verification, idempotency, compact briefing, status/doctor, and rebuild comparison. Tests cover Phase 1 behavior.
+
+Not implemented: replayable check definitions/execution, runtime traces, Python `explore`/`locate`, benchmark harness and measured go/no-go result, symbol footprints/staleness, investigation rows, leases, handoffs, optimistic versions, patch proposals, reports, export, migrations after version 1, FTS5-backed retrieval, or full CLI command contract. Later phases must be built only after the relevant gates pass. Do not treat old `octane/` or `openclaw/` code as evidence these Octance features exist.

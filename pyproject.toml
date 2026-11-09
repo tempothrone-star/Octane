@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "octane-pil"
+version = "0.1.0"
+description = "Persistent, evidence-driven software project intelligence"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+octane = "octane.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["octane*"]

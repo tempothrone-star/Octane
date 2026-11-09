@@ -1,7 +1,8 @@
 {
-  "name": "octane-openclaw",
+  "name": "octane-openclaw-legacy",
   "version": "0.1.0",
-  "description": "OpenClaw plugin and companion skill for project intelligence",
+  "private": true,
+  "description": "Archived legacy OpenClaw plugin; not the current Octance skill deliverable",
   "type": "module",
   "files": [
     "openclaw/index.js",

@@ -1,45 +1,49 @@
-# Internal project-intelligence engine
+# Octance Phase 1 architecture
 
-## Role in the product
+## Product boundary
 
-The primary product is the OpenClaw plugin and companion skill described in [`openclaw.md`](openclaw.md). This document describes the bundled Python/SQLite engine that implements the plugin's persistence, retrieval, static scanning, revision tracking, and workspace operations. It is maintained as an internal component of that integration, not presented as a standalone autonomous agent or as an independent product surface. The OpenClaw Gateway and its configured agent remain responsible for model execution and tool policy.
+The product is the portable OpenClaw skill in `octance/`: a concise workflow plus a deterministic Python CLI. The CLI has no model SDK, makes no network calls, and uses only Python 3.9+ standard-library modules. OpenClaw's host agent supplies reasoning; its configured tools and sandbox policy determine whether the CLI can read a project or execute.
 
-## Persistence and migrations
+The skill directory contains `SKILL.md`, a self-contained `scripts/` implementation, and numbered SQL migrations. `scripts/octance.py` at the repository root is a development convenience wrapper that invokes the bundled skill CLI.
 
-`ProjectIntelligence` opens a file-backed SQLite database, enables foreign keys and a busy timeout, and uses WAL. Writes use `BEGIN IMMEDIATE` and roll back on exceptions. Schema migration records are stored in `schema_migrations`; migrations 1–4 execute transactionally and rerunning initialization is safe.
+## Project layout and identity
 
-The schema's main ownership boundary is `project_id`. Projects own agents, files, graph nodes and edges, evidence, memories, investigations, hypotheses, revisions, workspaces, and audit/activity events. Foreign keys prevent dangling references. Project source files are never copied into SQLite; only hashes, paths, locations, and analysis metadata are stored.
+Each analyzed root stores runtime state under `.octance/`:
 
-## Evidence, memory, and hypotheses
+- `octance.db`: SQLite WAL database, schema version 1.
+- `project.json`: project UUID, canonical root, and a last-committed log-head anchor.
+- `config.json`: default trust tier and an initially empty execution allowlist reserved for later phases.
 
-Evidence rows preserve a structured payload, description, source agent, revision, optional relative path/line, verification status, and stale state. Evidence links are separate rows and can express support, contradiction, context, supersession, or verification. The `verified` state is only assigned by `mark_evidence_verified()` when a distinct, observed test/runtime/verification record is attached and the caller has `verify_evidence` permission.
+Initialization chooses `git rev-parse --show-toplevel` when Git is available; otherwise it uses the requested/current directory. All commands discover the nearest initialized root, compare its canonical path and project UUID with both the database and JSON metadata, and refuse if they disagree. `.gitignore` is never changed unless `init --update-gitignore` is explicitly provided. The repository itself is never used as a test project; tests initialize temporary roots.
 
-Memories are interpreted/shared knowledge, distinct from evidence. They can link to supporting evidence; when a referenced file changes, evidence and linked active memory are marked stale, not deleted. Hypotheses are separate records with explicit statuses and confidence estimates; confidence is a heuristic value, not a calibrated probability. Updating a hypothesis records old/new status and confidence in the audit log. Supporting and contradicting evidence links remain independently queryable.
+The revision recorded with evidence and claims is a SHA-256 digest of relative file paths and file bytes, excluding `.git`, `.octance`, and common generated/cache directories. No file contents are stored in the database. Git is optional and the hash fallback needs no Git command.
 
-## Graph and exploration
+## Append-only ledger
 
-`update_graph()` atomically upserts nodes and typed relationships. Relationships carry a confidence estimate and optional agent/evidence provenance. When an edge changes, its previous revision, confidence, metadata, and provenance are copied into `graph_edge_history`. The Python adapter discovers files, classes/functions, local imports, and conservative unique-name calls. `Tentacle` workers traverse already-recorded `calls` or `imports` edges under node/depth/time budgets, avoid repeating current-revision discoveries, and record their own evidence. Graph syntax findings are not a claim of full semantic understanding.
+Every phase-1 write appends an event containing sequence, project, agent, operation, canonical JSON payload, idempotency key, previous hash, and UTC timestamp. The hash is SHA-256 over the previous hash concatenated with canonical JSON for the event without its hash. The log has SQLite update/delete triggers; verification checks sequence continuity, project identity, predecessor links, event hashes, and the external `project.json` head anchor. `verify-log` detects edits, deletions, and reordering in tests.
 
-## Investigations and handover
+The anchor is updated after a committed event. As this update spans a database and a JSON file, a process interruption can leave it behind the database head; a verified anchor prefix is accepted. This is tamper evidence, not tamper prevention: an operator with raw shell access can alter the database and the anchor. SQLite permissions are cooperative guardrails, not a security boundary.
 
-An investigation stores objective, creation/owner information, revision, current context, state, and an append-only ordered list of checkpoints. Checkpoint context holds completed work, unresolved questions, evidence/hypothesis IDs, relevant paths, and next action. `resume_investigation()` compares the investigation revision with the current project revision before changing state. A mismatch is returned as `resumed: false`; the stored checkpoint remains intact for revalidation. Lifecycle states are constrained; completed and abandoned investigations are terminal.
+Idempotency keys supplied by callers are honored. Otherwise the CLI derives a deterministic SHA-256 key from agent, operation, and canonical request payload. A retry returns the original event record; reuse of an explicit key for different content is rejected. Counters allocate `EV-0001` and `CL-0001` transactionally per project. Agent IDs use `AG-<name>`; initialization creates `AG-owner` with the local admin role.
 
-The CLI demo and tests are developer fixtures for the bundled engine, not a separate multi-agent product. The fixture simulates three Octane permission records handing off an investigation, then leaves it blocked because the example's runtime behavior was not tested. A disposable second project demonstrates changed-file invalidation without editing the checked-in sample.
+Materialized project, agent, evidence, claim, link, and counter tables are written in the same `BEGIN IMMEDIATE` transaction as their event. `rebuild --check` replays supported phase-1 event types into an expected view and compares it to the live tables. It is a comparison only; a mutating rebuild is not implemented.
 
-## Revisions and stale knowledge
+## Evidence and claims
 
-The Python adapter calculates SHA-256 for Python files and records `mtime_ns` as supplementary metadata. In a Git checkout the revision label includes HEAD, working-tree status, and scanned-source hashes; outside Git it is derived from scanned file hashes. Each detected revision stores changed/removed paths and before/after hashes. Graph nodes/edges and file-sourced evidence are marked stale before the new scan refreshes current graph entries. Historical evidence and changed-edge snapshots are retained. Staleness is conservative; PIL does not automatically revalidate prior interpretations.
+Evidence and claims are distinct. Evidence is immutable and carries agent, type, description, structured payload, content hash, UTC time, revision, optional relative file/symbol/line range, method, verification status, and redaction count. Phase 1 accepts only `unverified` evidence; no command can mark evidence executed or replayed. Evidence links are append-only events.
 
-## Permissions and audit
+Claims use the kinds `observation`, `inference`, `hypothesis`, `intent`, `decision`, `requirement`, `limitation`, and `open_question`. They cite supporting/contradicting evidence and dependencies, carry a revision and a derived ordinal evidence basis, and have no numeric confidence. Low-trust agents' claims enter as `quarantined` and are excluded from `brief`. Claim status and text cannot be updated or deleted in phase 1; corrections require a new record/link. Only event reducers and CLI validators write the materialized tables; raw database access can bypass those cooperative rules.
 
-Agents have JSON-encoded capabilities and permissions. Mutating APIs with an agent identity check project membership and the required permission. Read APIs accept `requesting_agent_id` and enforce the corresponding read permission. Omitting the actor ID means a trusted, privileged local caller; it is not appropriate for an untrusted network-facing agent. Each important mutation writes an `audit_logs` row and an `agent_activity` row in the same transaction; callers can retrieve bounded audit results with `search_audit_logs()`.
+Common secret-like keys and values are redacted during evidence and claim ingest. This is best-effort pattern filtering, not a credential scanner or guarantee; users should not supply credentials. `brief` ranks keyword matches, includes open questions as unknowns, excludes quarantined claims, and obeys an estimated token budget of characters divided by four. It is not semantic retrieval. FTS5 is probed by `doctor` but phase-1 search uses bounded SQLite `LIKE` queries.
 
-Agent-provided configuration keys that resemble password, secret, token, API-key, credential, or private-key fields are rejected. Git remote URLs are stripped of userinfo, query, and fragment components before persistence. Do not put secrets in project configuration or evidence payloads.
+## SQLite and filesystem
 
-## Workspace boundary
+Connections enable foreign keys and a 5-second busy timeout. The database uses WAL and numbered transactional migrations. The CLI refuses a schema version newer than itself. `doctor` checks Python/SQLite versions, FTS5 availability, journal mode, log integrity, Git presence, and filesystem type where it can be detected. SQLite WAL is unsupported on some network filesystems; on platforms or mounts that cannot be identified, `doctor` warns rather than assuming local storage. Wall-clock timestamps are UTC ISO-8601; leases are not implemented yet, so clock-skew behavior remains future work.
 
-Snapshots are created outside the project root, ignore VCS/virtualenv/cache content and symlinks/special files, and are cleaned if setup fails. Candidate edits are allowed only in experimentation snapshots. Project commands run only through Docker with networking disabled, a read-only observation mount or writable experiment mount, resource/time limits, capped output, and timeout cleanup attempts. Docker is a container boundary, not a VM; the daemon and selected image remain trusted infrastructure. Runtime execution was not available in this environment and has not been claimed as verified.
+No project command execution, network access, telemetry, patch application, or source modification exists in Phase 1. The skill cannot guarantee shell isolation. OpenClaw's sandbox is off by default and configured separately; `exec` may run on the Gateway host unless policy routes it to a sandbox. Operators should restrict tools and configure sandbox workspace access appropriately.
 
-## Engine limits and maintenance
+## Phase status
 
-The engine intentionally has no model runtime or autonomous repair loop; model execution and the user-facing agent experience belong to OpenClaw. Its Python AST adapter is conservative and does not provide full-text/semantic search, generic multi-language parsing, complete data/control-flow analysis, runtime instrumentation, or automatic root-cause repair. Investigations track both creator and current assignee; resuming hands assignment to the receiving agent. New database changes must add a migration beyond version 4.
+Implemented: setup, project identity checks, owner and fixed-role agent registration, evidence/claim ingest and retrieval, secret redaction, hash-chain verification, idempotency, compact briefing, status/doctor, and rebuild comparison. Tests cover Phase 1 behavior.
+
+Not implemented: replayable check definitions/execution, runtime traces, Python `explore`/`locate`, benchmark harness and measured go/no-go result, symbol footprints/staleness, investigation rows, leases, handoffs, optimistic versions, patch proposals, reports, export, migrations after version 1, FTS5-backed retrieval, or full CLI command contract. Later phases must be built only after the relevant gates pass. Do not treat old `octane/` or `openclaw/` code as evidence these Octance features exist.

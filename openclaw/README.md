@@ -1,6 +1,8 @@
-# Octane for OpenClaw
+# Legacy Octane OpenClaw plugin — archived, not the Octance skill
 
-Octane is distributed as a native OpenClaw plugin **and** a companion `octane` skill. The plugin exposes the existing Python PIL through twelve optional OpenClaw tools; the skill teaches the agent to use those tools with provenance, uncertainty, revision awareness, and safe handoff practices.
+> **Status:** This is retained historical documentation for the earlier native-plugin implementation. It is not the current product, is not the installable `octance` skill, and must not be used as instructions for installing or operating Octance Phase 1. The current deliverable is [`../octance/`](../octance/) with its bundled standard-library CLI. The legacy plugin uses a different database, persistence model, permissions, runtime, and feature set; those features do not imply corresponding Octance functionality.
+
+The following sections document the old `octane` plugin only. It exposes the earlier Python PIL through optional tools and is not maintained as the current skill-first interface.
 
 ## Requirements
 

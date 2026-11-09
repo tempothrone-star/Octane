@@ -1,4 +1,6 @@
-# Octane for OpenClaw: design, security, and validation
+# Legacy Octane OpenClaw plugin notes (archived)
+
+> These notes describe the superseded native `octane` plugin implementation. They are retained for historical context only and do not describe the current skill-first `octance` deliverable. The supported Phase 1 artifact is [`../octance/`](../octance/); do not use the plugin install instructions or treat its capabilities as implemented by Octance.
 
 ## Research snapshot
 

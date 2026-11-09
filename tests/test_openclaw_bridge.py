@@ -212,13 +212,16 @@ class OpenClawBridgeTests(unittest.TestCase):
         self.assertFalse(manifest["configSchema"]["properties"]["allowAgentProvisioning"].get("default", True))
         readme = (root / "README.md").read_text(encoding="utf-8")
         architecture = (root / "docs" / "architecture.md").read_text(encoding="utf-8")
-        self.assertTrue(readme.startswith("# Octane for OpenClaw\n"))
-        self.assertIn("not a separate autonomous agent", readme)
-        self.assertIn("internal component", architecture)
-        skill = (root / "openclaw" / "skills" / "octane" / "SKILL.md").read_text(encoding="utf-8")
-        self.assertTrue(skill.startswith("---\nname: octane\n"))
-        self.assertIn("this skill does not grant permissions", skill)
-        self.assertIn("not verified OpenClaw runtime agent identities", skill)
+        self.assertTrue(readme.startswith("# Octance\n"))
+        self.assertIn("not an autonomous repair agent", readme)
+        self.assertIn("The product is the portable OpenClaw skill in `octance/`", architecture)
+        legacy_readme = (root / "openclaw" / "README.md").read_text(encoding="utf-8")
+        self.assertIn("archived, not the Octance skill", legacy_readme)
+        current_skill = (root / "octance" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(current_skill.startswith("---\nname: octance\n"))
+        self.assertIn("does not grant filesystem or shell access", current_skill)
+        self.assertIn("does not implement `check`, `explore`, or `locate`", current_skill)
+        self.assertTrue(json.loads((root / "package.json").read_text(encoding="utf-8"))["private"])
 
 
 if __name__ == "__main__":

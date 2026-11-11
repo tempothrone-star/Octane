@@ -711,9 +711,16 @@ class Project:
             row = conn.execute("SELECT * FROM claims WHERE claim_id=? AND project_id=?", (claim_id, self.project_id)).fetchone()
             if not row:
                 raise OctanceError("unknown claim", 2, "not_found")
-            previous = conn.execute("SELECT status FROM claim_status_events WHERE claim_id=? ORDER BY id DESC LIMIT 1", (claim_id,)).fetchone()
-            previous_status = previous[0] if previous else row["status"]
-            request = {"claim_id": claim_id, "status": status}
+            previous = conn.execute("SELECT id,previous_status,status,agent_id,created_at FROM claim_status_events WHERE claim_id=? ORDER BY id DESC LIMIT 1", (claim_id,)).fetchone()
+            previous_status = previous["status"] if previous else row["status"]
+            if previous_status == status and previous:
+                conn.commit()
+                return {"claim_id": claim_id, "previous_status": previous["previous_status"], "status": status,
+                        "agent_id": previous["agent_id"], "created_at": previous["created_at"]}
+            if actor["trust_tier"] == "low" and status != previous_status:
+                raise OctanceError("low-trust agents cannot transition claim status", 2, "permission_denied")
+            request = {"claim_id": claim_id, "status": status, "previous_status": previous_status,
+                       "previous_event_id": previous["id"] if previous else None}
             def build(_conn: sqlite3.Connection, when: str) -> Dict[str, Any]:
                 return {"claim_id": claim_id, "previous_status": previous_status, "status": status,
                         "agent_id": actor_id, "created_at": when}
@@ -905,8 +912,14 @@ class Project:
     def status(self) -> Dict[str, Any]:
         conn = self.ledger.connect()
         try:
-            stale = conn.execute("SELECT count(*) FROM claims WHERE project_id=? AND status IN ('stale','needs_review')", (self.project_id,)).fetchone()[0]
-            asserted = conn.execute("SELECT count(*) FROM claims WHERE project_id=? AND status='asserted'", (self.project_id,)).fetchone()[0]
+            counts = conn.execute(
+                "SELECT COALESCE(SUM(CASE WHEN effective_status IN ('stale','needs_review') THEN 1 ELSE 0 END),0), "
+                "COALESCE(SUM(CASE WHEN effective_status='asserted' THEN 1 ELSE 0 END),0) FROM ("
+                "SELECT COALESCE((SELECT cse.status FROM claim_status_events cse "
+                "WHERE cse.claim_id=claims.claim_id "
+                "ORDER BY cse.rowid DESC LIMIT 1), claims.status) AS effective_status "
+                "FROM claims WHERE project_id=?)", (self.project_id,)).fetchone()
+            stale, asserted = counts[0], counts[1]
             evidence = conn.execute("SELECT count(*) FROM evidence WHERE project_id=? AND verification_status='unverified'", (self.project_id,)).fetchone()[0]
         finally:
             conn.close()

@@ -67,13 +67,16 @@ After you run an approved test using the host's authorized tools, save its plain
 python3 scripts/octance.py locate --trace-file .octance/failure.log --query "parse request"
 ```
 
-This currently recognizes common frame formats for Python, JavaScript/TypeScript, Go, Java, Rust, and C/C++. The inventory supports a broader extension list, applies count/size limits, skips common vendor/generated directories, and reports unsupported extensions. `graph` extracts bounded internal file dependencies from Python imports and common import/include forms in JavaScript/TypeScript, Go, Java, Rust, C/C++, C#, PHP, Ruby, Kotlin, and Scala:
+The inventory recognizes built-in extensions across mainstream, functional, scripting, systems, hardware-description, and data languages (including Zig, Nim, Fortran, COBOL, Ada, Pascal, OCaml, Solidity, Verilog/VHDL, PowerShell, and more). It applies count/size limits, skips common vendor/generated directories, and reports unsupported extensions. Add project-specific language suffixes with a data-only `.octance/languages.json` registry. Definitions may also declare safe import forms (`quoted_import_keywords`, `module_import_keywords`, and `from_import`), for example `{"languages":{"quartz":{"extensions":[".qz"],"quoted_import_keywords":["fetch"]}}}` for `fetch "helper"` imports. Load it with `--language-config .octance/languages.json` on `languages`, `graph`, and `locate`. No project code, regexes, or plugins are loaded.
+
+By default `graph` uses Python's AST, the optional Tree-sitter backend when installed, existing language-specific recognizers, and a conservative generic fallback for line-oriented imports. The default CLI remains Python 3.9+ and standard-library-only; installing the parser extra uses this package's Python 3.11+ requirement. To opt into the bundled Tree-sitter grammar set, install the optional extra from the repository root and request it explicitly:
 
 ```sh
-python3 scripts/octance.py graph
+python3 -m pip install '.[ast]'
+python3 scripts/octance.py graph --parser tree-sitter
 ```
 
-This is not a full parser: only Python uses the standard-library AST; other languages use conservative textual patterns, so imports may be missed or misresolved. The graph is a best-effort dependency map, not a complete call graph or proof of runtime reachability. These commands do not modify source or execute project code. `locate` is heuristic file ranking, not a root-cause result; see [`docs/implementation-and-limitations.md`](docs/implementation-and-limitations.md) for the synthetic benchmark and its limits.
+The default CLI remains standard-library-only. Tree-sitter produces concrete syntax trees, not compiler-semantic ASTs; its pinned offline grammar bundle covers many common languages, while unsupported grammars fall back to static import recognizers. The generic fallback supports `import`, `include`, `require`, `use`, `mod`, `source`, `load`, and configured `from ... import` forms, resolving project-local paths using registered suffixes. The graph is a best-effort dependency map, not a complete call graph or proof of runtime reachability. These commands do not modify source or execute project code. `locate` is heuristic file ranking, not a root-cause result; see [`docs/implementation-and-limitations.md`](docs/implementation-and-limitations.md) for the synthetic benchmark and its limits.
 
 ## Data and safety
 

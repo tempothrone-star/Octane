@@ -93,6 +93,42 @@ class PolyglotDependencyGraphTests(unittest.TestCase):
         self.assertIn(("ruby/entry.rb", "ruby/local.rb"), {(edge["source"], edge["target"]) for edge in graph["edges"]})
         self.assertFalse(any(row["source"] == "ruby/entry.rb" for row in graph["unresolved_references"]))
 
+    def test_generic_import_fallback_resolves_new_language_modules(self):
+        self.write("nim/main.nim", "import helper\n")
+        self.write("nim/helper.nim", "proc run() = discard\n")
+        sys.path.insert(0, str(ROOT / "octance" / "scripts"))
+        from octance.polygraph import build_dependency_graph
+        graph = build_dependency_graph(self.root)
+        edges = {(edge["source"], edge["target"]) for edge in graph["edges"]}
+        self.assertIn(("nim/main.nim", "nim/helper.nim"), edges)
+        self.assertIn("nim", graph["languages"])
+        self.assertIn("generic-line-fallback", graph["parser_coverage"]["heuristic_import_patterns"])
+
+    def test_python_from_import_edges_include_submodules_and_namespace_packages(self):
+        self.write("pkg/__init__.py", "")
+        self.write("pkg/helper.py", "VALUE = 1\n")
+        self.write("ns_pkg/worker.py", "VALUE = 2\n")
+        self.write("client/__init__.py", "")
+        self.write("client/entry.py", "from ..pkg import helper\n")
+        self.write("app.py", "from pkg import helper\nfrom ns_pkg import worker\n")
+        sys.path.insert(0, str(ROOT / "octance" / "scripts"))
+        from octance.polygraph import build_dependency_graph
+        graph = build_dependency_graph(self.root)
+        edges = {(edge["source"], edge["target"]) for edge in graph["edges"]}
+        self.assertIn(("app.py", "pkg/__init__.py"), edges)
+        self.assertIn(("app.py", "pkg/helper.py"), edges)
+        self.assertIn(("app.py", "ns_pkg/worker.py"), edges)
+        self.assertIn(("client/entry.py", "pkg/helper.py"), edges)
+        self.assertFalse(any(row["source"] in {"app.py", "client/entry.py"} for row in graph["unresolved_references"]))
+
+    def test_explicit_tree_sitter_mode_has_a_clear_optional_dependency_gate(self):
+        from octance import ast_backend
+        from octance.polygraph import build_dependency_graph
+        if ast_backend.available():
+            self.skipTest("optional Tree-sitter package is installed")
+        with self.assertRaisesRegex(ValueError, "optional"):
+            build_dependency_graph(self.root, parser="tree-sitter")
+
     def test_graph_limits_and_cli_input_errors(self):
         self.write("a.py", "import b\n")
         self.write("b.py", "value = 1\n")

@@ -8,8 +8,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-if sys.version_info < (3, 11):
-    raise unittest.SkipTest("the native PIL plugin suite requires Python 3.11+")
+if sys.version_info < (3, 10):
+    raise unittest.SkipTest("the native PIL plugin suite requires Python 3.10+")
 
 from octane.openclaw_bridge import BridgeError, OctaneBridge
 
@@ -230,7 +230,9 @@ class OpenClawBridgeTests(unittest.TestCase):
         self.assertTrue((root / "tests" / "__init__.py").is_file())
         self.assertIn("does not grant filesystem or shell access", current_skill)
         self.assertIn("does not yet implement a predeclared replayable check runner", current_skill)
-        self.assertIn("`locate` is heuristic", current_skill)
+        self.assertIn("is heuristic, and is not root-cause localization", current_skill)
+        self.assertIn("safe import keywords", current_skill)
+        self.assertIn("--language-config .octance/languages.json", current_skill)
         self.assertIn("openclaw skills install git:https://github.com/tempothrone-star/Octane.git", readme)
         package = json.loads((root / "package.json").read_text(encoding="utf-8"))
         self.assertEqual(package["name"], "octane-openclaw")

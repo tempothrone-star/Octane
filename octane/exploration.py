@@ -93,8 +93,12 @@ class PythonAdapter:
                     if isinstance(node, ast.Import):
                         imports.extend((path, alias.name, node.lineno, 0) for alias in node.names)
                     else:
-                        names = [node.module or ""] + ([alias.name for alias in node.names] if not node.module else [])
-                        imports.extend((path, name, node.lineno, node.level) for name in names)
+                        if node.module:
+                            names = [node.module] + [node.module + "." + alias.name
+                                                     for alias in node.names if alias.name != "*"]
+                        else:
+                            names = [alias.name for alias in node.names if alias.name != "*"]
+                        imports.extend((path, name, node.lineno, node.level) for name in names if name)
             if rel in changed:
                 intelligence.submit_evidence(project_id, "file_scan", {"path": rel, "sha256": hashes[rel], "symbols": sum(1 for f in function_nodes if f[1] == rel)},
                                              "Python file hashed and inspected using AST", agent_id=scanner["id"], revision=revision, source_path=rel, verification_status="observed")

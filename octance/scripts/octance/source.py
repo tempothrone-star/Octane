@@ -8,8 +8,11 @@ import os
 import re
 import subprocess
 from collections import Counter, defaultdict
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+LANGUAGE_IMPORT_SYNTAX: Dict[str, Dict[str, Any]] = {}
 
 LANGUAGES = {
     ".py": "python", ".pyi": "python", ".pyx": "python",
@@ -26,7 +29,73 @@ LANGUAGES = {
     ".clj": "clojure", ".cljs": "clojure", ".cljc": "clojure", ".hs": "haskell", ".lhs": "haskell",
     ".elm": "elm", ".r": "r", ".R": "r", ".jl": "julia", ".m": "objective_c_or_matlab",
     ".mm": "objective_c", ".scala": "scala", ".groovy": "groovy", ".gradle": "groovy",
+    ".d": "d", ".di": "d", ".zig": "zig", ".nim": "nim", ".nims": "nim",
+    ".cr": "crystal", ".cob": "cobol", ".cbl": "cobol", ".ada": "ada", ".adb": "ada", ".ads": "ada",
+    ".pas": "pascal", ".pp": "pascal", ".ml": "ocaml", ".mli": "ocaml", ".re": "reason", ".rei": "reason",
+    ".sol": "solidity", ".v": "verilog_or_coq", ".vh": "verilog", ".sv": "verilog", ".svh": "verilog",
+    ".vhd": "vhdl", ".vhdl": "vhdl", ".asm": "assembly", ".s": "assembly", ".S": "assembly",
+    ".rkt": "racket", ".scm": "scheme", ".ss": "scheme", ".lisp": "lisp", ".lsp": "lisp",
+    ".purs": "purescript", ".idr": "idris", ".lean": "lean", ".agda": "agda", ".pro": "prolog",
+    ".ps1": "powershell", ".psm1": "powershell", ".bat": "batch", ".cmd": "batch",
+    ".f": "fortran", ".for": "fortran", ".f77": "fortran", ".f90": "fortran", ".f95": "fortran",
+    ".f03": "fortran", ".f08": "fortran", ".cu": "cuda", ".cuh": "cuda", ".metal": "metal",
+    ".hx": "haxe", ".hxml": "haxe", ".tf": "hcl", ".nix": "nix", ".jsonnet": "jsonnet",
+    ".json": "json", ".md": "markdown", ".markdown": "markdown", ".rst": "restructuredtext",
+    ".toml": "toml", ".yaml": "yaml", ".yml": "yaml", ".el": "elisp", ".mk": "make",
+    ".make": "make", ".dockerfile": "dockerfile", ".hack": "hack", ".ql": "ql", ".tsq": "tsq",
+    ".sqlite": "sqlite", ".dot": "dot", ".gv": "dot", ".ejs": "embedded_template",
+    ".erb": "embedded_template", ".hbs": "embedded_template", ".jsdoc": "jsdoc", ".regex": "regex",
 }
+
+
+def register_language(language: str, extensions: Iterable[str], *,
+                      quoted_import_keywords: Sequence[str] = (),
+                      module_import_keywords: Sequence[str] = (),
+                      from_import: bool = False) -> None:
+    """Register a language's source suffixes and safe generic import forms.
+
+    Registration is data-only: it never loads code or regular expressions from
+    a project. Extensions may be supplied with or without a leading dot.
+    """
+    if not isinstance(language, str) or not re.fullmatch(r"[a-z][a-z0-9_+-]{0,63}", language):
+        raise ValueError("language name must be a lowercase identifier")
+    if not isinstance(from_import, bool):
+        raise ValueError("from_import must be boolean")
+    def normalize_keywords(values: Sequence[str], field: str) -> Tuple[str, ...]:
+        if not isinstance(values, (list, tuple)) or len(values) > 16:
+            raise ValueError(field + " must be a list of at most 16 keywords")
+        if any(not isinstance(item, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,31}", item)
+               for item in values):
+            raise ValueError(field + " contains an invalid keyword")
+        return tuple(dict.fromkeys(values))
+    quoted_keywords = normalize_keywords(quoted_import_keywords, "quoted_import_keywords")
+    module_keywords = normalize_keywords(module_import_keywords, "module_import_keywords")
+    normalized = set()
+    for extension in extensions:
+        if not isinstance(extension, str):
+            raise ValueError("language extensions must be strings")
+        suffix = extension.lower()
+        if not suffix.startswith("."):
+            suffix = "." + suffix
+        if not re.fullmatch(r"\.[a-z0-9][a-z0-9._+-]{0,31}", suffix):
+            raise ValueError("invalid source extension: " + extension)
+        normalized.add(suffix)
+    if not normalized:
+        raise ValueError("at least one source extension is required")
+    if len(normalized) > 64 or len(set(LANGUAGES) | normalized) > 512:
+        raise ValueError("language extension registry exceeds its supported size")
+    for suffix in normalized:
+        owner = LANGUAGES.get(suffix)
+        if owner is not None and owner != language:
+            raise ValueError("source extension %s is already registered as %s" % (suffix, owner))
+    LANGUAGES.update((suffix, language) for suffix in normalized)
+    previous = LANGUAGE_IMPORT_SYNTAX.get(language, {})
+    LANGUAGE_IMPORT_SYNTAX[language] = {
+        "quoted": tuple(dict.fromkeys(previous.get("quoted", ()) + quoted_keywords)),
+        "module": tuple(dict.fromkeys(previous.get("module", ()) + module_keywords)),
+        "from_import": bool(previous.get("from_import", False) or from_import),
+    }
+
 EXCLUDED_DIRS = {
     ".git", ".octance", ".hg", ".svn", ".venv", "venv", "env", "__pycache__", ".tox",
     "node_modules", "vendor", "target", "dist", "build", "coverage", ".next", ".nuxt",
@@ -45,6 +114,18 @@ _FRAME_PATTERNS = (
 )
 
 _FRAME_FORMATS = ("python", "javascript", "java", "go", "rust", "c_cpp")
+
+
+@lru_cache(maxsize=16)
+def _generic_frame_patterns(extensions: Tuple[str, ...]) -> Tuple[re.Pattern[str], ...]:
+    if not extensions:
+        return ()
+    suffixes = "|".join(re.escape(item.lstrip(".")) for item in extensions)
+    extension = r"(?:%s)" % suffixes
+    return (
+        re.compile(r"(?P<path>(?:[A-Za-z]:)?[^()\s:]+?\." + extension + r"):(?P<line>\d+)(?::\d+)?(?:\)|\s|$)"),
+        re.compile(r"(?P<path>[^()\s]+?\." + extension + r")\((?P<line>\d+)(?:,\d+)?\)"),
+    )
 
 
 def source_inventory(root: Path, max_files: int = 100000, max_file_bytes: int = 5 * 1024 * 1024) -> Dict[str, Any]:
@@ -135,8 +216,10 @@ def parse_stack_frames(text: str, root: Path) -> List[Dict[str, Any]]:
     root = root.resolve()
     frames: List[Dict[str, Any]] = []
     seen = set()
+    extensions = tuple(sorted({extension.lower() for extension in LANGUAGES}, key=lambda item: (-len(item), item)))
+    patterns = _FRAME_PATTERNS + _generic_frame_patterns(extensions)
     for line_text in text.splitlines():
-        for pattern_index, pattern in enumerate(_FRAME_PATTERNS):
+        for pattern_index, pattern in enumerate(patterns):
             match = pattern.search(line_text)
             if not match:
                 continue
@@ -158,8 +241,9 @@ def parse_stack_frames(text: str, root: Path) -> List[Dict[str, Any]]:
             symbol = match.groupdict().get("symbol")
             key = (relative, line_number, symbol)
             if key not in seen:
+                frame_format = _FRAME_FORMATS[pattern_index] if pattern_index < len(_FRAME_FORMATS) else "generic"
                 frames.append({"path": relative, "line": line_number, "symbol": symbol.strip() if symbol else None,
-                               "format": _FRAME_FORMATS[pattern_index], "trace_line": line_text.strip()[:500]})
+                               "format": frame_format, "trace_line": line_text.strip()[:500]})
                 seen.add(key)
             break
     return frames
@@ -289,7 +373,7 @@ def locate_suspects(root: Path, trace_text: str, query: str = "", limit: int = 2
         score = 0.0
         reasons = []
         if frame_hits:
-            proximity = max(0.0, 20.0 - 20.0 * (primary_distance or 0))
+            proximity = 40.0 / (1 + (primary_distance or 0))
             score += 40.0 * frame_hits + proximity
             reasons.append("appears in parsed stack trace (%d frame(s))" % frame_hits)
             if primary_distance == 0:

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from .core import CLAIM_KINDS, CLAIM_STATUSES, EVIDENCE_TYPES, Ledger, OctanceError, Project, canonical, diagnose_project, discover_root, init_project, resolve_project_root
 from .polygraph import build_dependency_graph
-from .source import locate_suspects, source_inventory
+from .source import LANGUAGE_IMPORT_SYNTAX, LANGUAGES, locate_suspects, register_language, source_inventory
 
 EXIT_PERMISSION = 3
 EXIT_CONFLICT = 4
@@ -129,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     languages = commands.add_parser("languages", help="inventory supported source files without parsing or executing them")
     languages.add_argument("--max-files", type=int, default=100000)
     languages.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
+    languages.add_argument("--language-config", help="project-relative JSON file registering custom language extensions")
     _common(languages)
 
     locate = commands.add_parser("locate", help="rank file-level suspects from an existing failure trace")
@@ -137,12 +138,16 @@ def build_parser() -> argparse.ArgumentParser:
     locate.add_argument("--limit", type=int, default=20)
     locate.add_argument("--max-files", type=int, default=100000)
     locate.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
+    locate.add_argument("--language-config", help="project-relative JSON file registering custom language extensions")
     _common(locate)
 
     graph = commands.add_parser("graph", help="build a bounded best-effort internal file dependency graph")
     graph.add_argument("--max-files", type=int, default=100000)
     graph.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
     graph.add_argument("--max-total-bytes", type=int, default=100 * 1024 * 1024)
+    graph.add_argument("--parser", choices=("auto", "heuristic", "tree-sitter"), default="auto",
+                       help="prefer bundled Tree-sitter syntax trees when installed; otherwise use heuristics")
+    graph.add_argument("--language-config", help="project-relative JSON file registering custom language extensions")
     _common(graph)
     return parser
 
@@ -196,6 +201,51 @@ def _load_payload(text: str) -> Dict[str, Any]:
     return value
 
 
+def _register_language_config(root: Path, config_name: Optional[str]) -> None:
+    if not config_name:
+        return
+    supplied = Path(config_name)
+    if supplied.is_absolute():
+        raise OctanceError("language config must be a project-relative path", 2, "invalid_input")
+    unresolved = root / supplied
+    if unresolved.is_symlink():
+        raise OctanceError("language config must not be a symlink", 2, "invalid_input")
+    path = unresolved.resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        raise OctanceError("language config must be inside the project root", 2, "invalid_input")
+    try:
+        if not path.is_file() or path.stat().st_size > 1024 * 1024:
+            raise OctanceError("language config must be a regular file no larger than 1 MiB", 2, "invalid_input")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise OctanceError("cannot read language config: " + str(error), 2, "invalid_input")
+    languages = payload.get("languages") if isinstance(payload, dict) else None
+    if not isinstance(languages, dict) or len(languages) > 256:
+        raise OctanceError("language config must contain a languages object with at most 256 entries", 2, "invalid_input")
+    original_languages = dict(LANGUAGES)
+    original_syntax = dict(LANGUAGE_IMPORT_SYNTAX)
+    try:
+        for name, definition in languages.items():
+            if not isinstance(definition, dict) or set(definition) - {
+                    "extensions", "quoted_import_keywords", "module_import_keywords", "from_import"}:
+                raise ValueError("language definitions contain unsupported fields")
+            extensions = definition.get("extensions")
+            if not isinstance(extensions, list) or len(extensions) > 64:
+                raise ValueError("each language definition must contain up to 64 extensions")
+            register_language(name, extensions,
+                              quoted_import_keywords=definition.get("quoted_import_keywords", []),
+                              module_import_keywords=definition.get("module_import_keywords", []),
+                              from_import=definition.get("from_import", False))
+    except (TypeError, ValueError) as error:
+        LANGUAGES.clear()
+        LANGUAGES.update(original_languages)
+        LANGUAGE_IMPORT_SYNTAX.clear()
+        LANGUAGE_IMPORT_SYNTAX.update(original_syntax)
+        raise OctanceError("invalid language config: " + str(error), 2, "invalid_input")
+
+
 def _run(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "init":
         root = resolve_project_root(explicit=args.project_root)
@@ -206,6 +256,8 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         result = diagnose_project(root)
         return _response(result, result.get("warnings", []))
     root = discover_root()
+    if args.command in {"languages", "locate", "graph"}:
+        _register_language_config(root, getattr(args, "language_config", None))
     project = Project(root)
     agent_id = project.agent_id(getattr(args, "agent", None))
     actor = project.ledger.get_agent(agent_id, project.project_id)
@@ -263,7 +315,8 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         return _response(result)
     if args.command == "graph":
         try:
-            result = build_dependency_graph(root, args.max_files, args.max_file_bytes, args.max_total_bytes)
+            result = build_dependency_graph(root, args.max_files, args.max_file_bytes,
+                                            args.max_total_bytes, parser=args.parser)
         except ValueError as error:
             raise OctanceError(str(error), 2, "invalid_input")
         return _response(result)

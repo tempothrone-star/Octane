@@ -52,7 +52,7 @@ _EXTENSIONS = {
 }
 
 
-def _tokens(text: str, hash_comments: bool = False) -> List[Tuple[str, str, int]]:
+def _tokens(text: str, hash_comments: bool = False, slash_regex: bool = False) -> List[Tuple[str, str, int]]:
     """Small lexical scanner for dependency declarations, not a full parser."""
     tokens: List[Tuple[str, str, int]] = []
     i, line, size = 0, 1, len(text)
@@ -72,6 +72,29 @@ def _tokens(text: str, hash_comments: bool = False) -> List[Tuple[str, str, int]
         if text.startswith("/*", i):
             end = text.find("*/", i + 2)
             i = size if end < 0 else end + 2
+            line += text[start:i].count("\n")
+            continue
+        if slash_regex and char == "/" and _can_start_regex(tokens):
+            i += 1
+            escaped = False
+            in_class = False
+            while i < size and text[i] != "\n":
+                current = text[i]
+                if escaped:
+                    escaped = False
+                elif current == "\\":
+                    escaped = True
+                elif current == "[":
+                    in_class = True
+                elif current == "]":
+                    in_class = False
+                elif current == "/" and not in_class:
+                    i += 1
+                    while i < size and text[i].isalpha():
+                        i += 1
+                    break
+                i += 1
+            tokens.append(("regex", "", line))
             line += text[start:i].count("\n")
             continue
         if char in ("'", '"', "`"):
@@ -117,6 +140,15 @@ def _quoted_token(token: Tuple[str, str, int]) -> Optional[Tuple[str, int]]:
     return (token[1], token[2]) if token[0] == "string" else None
 
 
+def _can_start_regex(tokens: Sequence[Tuple[str, str, int]]) -> bool:
+    if not tokens:
+        return True
+    kind, value, _line = tokens[-1]
+    if kind == "identifier" and value in {"return", "throw", "case", "delete", "void", "typeof", "instanceof", "in", "of", "yield", "await", "else", "do"}:
+        return True
+    return value in {"=", "(", "[", "{", ",", ":", ";", "!", "?", "=>", "&&", "||", "??", "&", "|", "^", "~", "<", ">"}
+
+
 def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
     """Recognize static dependency forms while ignoring comments and literals."""
     if language in ("c", "cpp"):
@@ -125,7 +157,7 @@ def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
         clean = re.sub(r"/\*.*?\*/", lambda match: "\n" * match.group(0).count("\n"), clean, flags=re.S)
         return [(match.group(1), clean.count("\n", 0, match.start()) + 1)
                 for match in re.finditer(r'(?m)^\s*#\s*include\s*"([^"\n]+)"', clean)]
-    tokens = _tokens(text, hash_comments=language in ("ruby",))
+    tokens = _tokens(text, hash_comments=language in ("ruby",), slash_regex=language in ("javascript", "typescript", "ruby"))
     results: List[Tuple[str, int]] = []
     i = 0
     while i < len(tokens):
@@ -235,12 +267,15 @@ def _python_imports(path: str, text: str) -> Tuple[List[Tuple[str, int]], int]:
             results.extend((alias.name, node.lineno) for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
             base = ("." * node.level) + (node.module or "")
-            if base.strip("."):
+            if node.module:
                 results.append((base, node.lineno))
-            for alias in node.names:
-                if alias.name != "*":
-                    separator = "." if node.module else ""
-                    results.append((base + separator + alias.name, node.lineno))
+            elif node.level:
+                # `from . import config` names a sibling module candidate; do not
+                # accidentally reinterpret it as a root-level `config.py`.
+                results.extend((base + alias.name, node.lineno)
+                               for alias in node.names if alias.name != "*")
+            elif base:
+                results.append((base, node.lineno))
     return results, 0
 
 
@@ -275,22 +310,28 @@ def _candidate_paths(spec: str, source_path: str, language: str, root: Path,
     candidates: List[str] = []
     source_dir = PurePosixPath(source_path).parent
     if language == "python":
-        module = spec.lstrip(".")
+        relative_import = spec.startswith(".")
+        module = spec.lstrip(".") if relative_import else spec
         parts = module.split(".") if module else []
         base = PurePosixPath(*parts).as_posix() if parts else ""
-        for ext in (".py",):
-            candidates.extend([base + ext, base + "/__init__" + ext])
-        # Relative imports resolve from the containing package directory.
-        if spec.startswith("."):
+        if relative_import:
             depth = len(spec) - len(spec.lstrip("."))
             prefix = source_dir
             for _ in range(max(0, depth - 1)):
                 prefix = prefix.parent
             relative = (prefix / base).as_posix()
             candidates.extend([relative + ".py", relative + "/__init__.py"])
+        else:
+            candidates.extend([base + ".py", base + "/__init__.py"])
     elif language in ("javascript", "typescript") or (language == "ruby" and spec.startswith(".")):
         base = (source_dir / spec).as_posix()
         candidates.append(base)
+        if language == "typescript":
+            source_suffix = PurePosixPath(base).suffix.lower()
+            substitutions = {".js": (".ts", ".tsx", ".d.ts"), ".jsx": (".tsx",),
+                             ".mjs": (".mts",), ".cjs": (".cts",)}
+            for replacement in substitutions.get(source_suffix, ()):
+                candidates.append(PurePosixPath(base).with_suffix(replacement).as_posix())
         for ext in (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".json", ".sql"):
             candidates.append(base + ext)
             candidates.append((PurePosixPath(base) / ("index" + ext)).as_posix())

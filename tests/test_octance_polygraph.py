@@ -65,6 +65,34 @@ class PolyglotDependencyGraphTests(unittest.TestCase):
         self.assertNotIn("./not-a-dependency", unresolved_specs)
         self.assertFalse(any("node_modules" in edge["source"] for edge in graph["edges"]))
 
+    def test_python_relative_imports_avoid_root_false_edges_and_symbol_unresolved_noise(self):
+        self.write("pkg/service.py", "from . import config\nfrom pkg.helper import parse\n")
+        self.write("pkg/config.py", "VALUE = 1\n")
+        self.write("pkg/helper.py", "def parse(value): return value\n")
+        self.write("config.py", "ROOT_VALUE = 1\n")
+        sys.path.insert(0, str(ROOT / "octance" / "scripts"))
+        from octance.polygraph import build_dependency_graph
+        graph = build_dependency_graph(self.root)
+        edges = {(edge["source"], edge["target"]) for edge in graph["edges"]}
+        self.assertIn(("pkg/service.py", "pkg/config.py"), edges)
+        self.assertIn(("pkg/service.py", "pkg/helper.py"), edges)
+        self.assertNotIn(("pkg/service.py", "config.py"), edges)
+        self.assertFalse(any(row["reference"].endswith(".parse") for row in graph["unresolved_references"]))
+
+    def test_js_regex_literals_do_not_hide_later_imports_and_ts_js_suffix_maps(self):
+        source = 'const quote = /"/;\nconst url = /https?:\\/\\//;\nimport { view } from "./view.js";\n'
+        self.write("web/entry.ts", source)
+        self.write("web/view.ts", "export function view() {}\n")
+        self.write("ruby/entry.rb", 'pattern = /"/\nurl = /https?:\\/\\//\nrequire_relative "local"\n')
+        self.write("ruby/local.rb", "VALUE = 1\n")
+        sys.path.insert(0, str(ROOT / "octance" / "scripts"))
+        from octance.polygraph import build_dependency_graph
+        graph = build_dependency_graph(self.root)
+        self.assertIn(("web/entry.ts", "web/view.ts"), {(edge["source"], edge["target"]) for edge in graph["edges"]})
+        self.assertFalse(any(row["source"] == "web/entry.ts" for row in graph["unresolved_references"]))
+        self.assertIn(("ruby/entry.rb", "ruby/local.rb"), {(edge["source"], edge["target"]) for edge in graph["edges"]})
+        self.assertFalse(any(row["source"] == "ruby/entry.rb" for row in graph["unresolved_references"]))
+
     def test_graph_limits_and_cli_input_errors(self):
         self.write("a.py", "import b\n")
         self.write("b.py", "value = 1\n")

@@ -44,6 +44,8 @@ _FRAME_PATTERNS = (
     re.compile(r"(?P<path>(?:[A-Za-z]:)?[^\s()]+?\.(?:c|h|cc|hh|cpp|hpp|cxx|hxx)):(?P<line>\d+)(?::\d+)?(?::|\s)"),  # C/C++
 )
 
+_FRAME_FORMATS = ("python", "javascript", "java", "go", "rust", "c_cpp")
+
 
 def source_inventory(root: Path, max_files: int = 100000, max_file_bytes: int = 5 * 1024 * 1024) -> Dict[str, Any]:
     """Classify files by extension with strict walk and per-file budgets."""
@@ -115,7 +117,13 @@ def _normalize_frame_path(raw: str, root: Path) -> Optional[str]:
         try:
             return candidate.resolve().relative_to(root).as_posix()
         except (OSError, ValueError):
-            return None
+            normalized = PurePosixPath(value.replace("\\", "/"))
+            if ".." in normalized.parts:
+                return None
+            external = normalized.as_posix()
+            if "/src/" in external:
+                return "src/" + external.split("/src/", 1)[1]
+            return external
     normalized = PurePosixPath(value.replace("\\", "/"))
     if ".." in normalized.parts:
         return None
@@ -128,7 +136,7 @@ def parse_stack_frames(text: str, root: Path) -> List[Dict[str, Any]]:
     frames: List[Dict[str, Any]] = []
     seen = set()
     for line_text in text.splitlines():
-        for pattern in _FRAME_PATTERNS:
+        for pattern_index, pattern in enumerate(_FRAME_PATTERNS):
             match = pattern.search(line_text)
             if not match:
                 continue
@@ -142,7 +150,7 @@ def parse_stack_frames(text: str, root: Path) -> List[Dict[str, Any]]:
                     relative = raw.split(marker, 1)[1]
                     relative = "src/" + relative
                 else:
-                    relative = Path(raw).name
+                    relative = PurePosixPath(raw.replace("\\", "/")).as_posix()
             try:
                 line_number = int(match.group("line"))
             except (ValueError, IndexError):
@@ -151,7 +159,7 @@ def parse_stack_frames(text: str, root: Path) -> List[Dict[str, Any]]:
             key = (relative, line_number, symbol)
             if key not in seen:
                 frames.append({"path": relative, "line": line_number, "symbol": symbol.strip() if symbol else None,
-                               "trace_line": line_text.strip()[:500]})
+                               "format": _FRAME_FORMATS[pattern_index], "trace_line": line_text.strip()[:500]})
                 seen.add(key)
             break
     return frames
@@ -215,9 +223,29 @@ def _resolve_frame(frame_path: str, root: Path, known: Dict[str, Dict[str, Any]]
             pass
     if frame_path in known:
         return frame_path
+    parts = [part for part in PurePosixPath(frame_path.replace("\\", "/")).parts if part not in ("/", "", ".")]
+    for start in range(len(parts)):
+        suffix = "/".join(parts[start:])
+        if suffix in known:
+            return suffix
+        matches = [path for path in known if path.endswith("/" + suffix)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            return None
     matches = basename_map.get(PurePosixPath(frame_path).name, [])
     return matches[0] if len(matches) == 1 else None
 
+
+
+
+def _word_tokens(value: str) -> List[str]:
+    """Split path punctuation, snake_case, and camelCase into queryable terms."""
+    chunks = re.findall(r"[A-Za-z0-9]+", value)
+    words: List[str] = []
+    for chunk in chunks:
+        words.extend(re.findall(r"[A-Z]+(?=[A-Z][a-z]|$)|[A-Z]?[a-z]+|[0-9]+", chunk))
+    return [word.casefold() for word in words]
 
 def locate_suspects(root: Path, trace_text: str, query: str = "", limit: int = 20,
                     max_files: int = 100000, max_file_bytes: int = 5 * 1024 * 1024) -> Dict[str, Any]:
@@ -239,23 +267,33 @@ def locate_suspects(root: Path, trace_text: str, query: str = "", limit: int = 2
         match = _resolve_frame(frame["path"], root, known, basename_map)
         if match:
             resolved.append((index, match, frame))
+    python_order = bool(frames) and all(frame.get("format") == "python" for frame in frames)
+    if resolved:
+        primary_frame_index = max(index for index, _path, _frame in resolved) if python_order else min(index for index, _path, _frame in resolved)
+    else:
+        primary_frame_index = None
     changed, warning = recent_project_changes(root)
     changed = [path for path in changed if path in known]
     changed_index = {path: index for index, path in enumerate(changed)}
-    terms = {term.lower() for term in re.findall(r"[A-Za-z_][A-Za-z0-9_.-]+", query) if len(term) > 1}
+    terms = {term.casefold() for term in _word_tokens(query) if len(term) > 1}
     candidates: Dict[str, Dict[str, Any]] = {}
     for path, item in known.items():
         matching_frames = [(index, frame) for index, frame_path, frame in resolved if frame_path == path]
         frame_hits = len(matching_frames)
         first_frame = min((index for index, _ in matching_frames), default=None)
-        path_terms = {term.lower() for term in re.findall(r"[A-Za-z_][A-Za-z0-9_.-]+", path)}
+        last_frame = max((index for index, _ in matching_frames), default=None)
+        primary_distance = min((abs(index - primary_frame_index) for index, _ in matching_frames), default=None)
+        path_terms = {term.casefold() for term in _word_tokens(path)}
         matched_terms = sorted(terms & path_terms)
         changed_rank = changed_index.get(path)
         score = 0.0
         reasons = []
         if frame_hits:
-            score += 40.0 * frame_hits + max(0.0, 20.0 - 3.0 * (first_frame or 0))
+            proximity = max(0.0, 20.0 - 20.0 * (primary_distance or 0))
+            score += 40.0 * frame_hits + proximity
             reasons.append("appears in parsed stack trace (%d frame(s))" % frame_hits)
+            if primary_distance == 0:
+                reasons.append("closest resolved frame to the likely fault site under this trace format")
         if changed_rank is not None:
             score += 18.0 / (1 + changed_rank)
             reasons.append("changed in the recent project history")
@@ -264,7 +302,8 @@ def locate_suspects(root: Path, trace_text: str, query: str = "", limit: int = 2
             reasons.append("path matches query term(s): " + ", ".join(matched_terms))
         if score:
             candidates[path] = {"path": path, "language": item["language"], "score": round(score, 3),
-                                "frame_hits": frame_hits, "first_frame": first_frame,
+                                "frame_hits": frame_hits, "first_frame": first_frame, "last_frame": last_frame,
+                                "primary_frame_distance": primary_distance,
                                 "recent_change_rank": changed_rank, "matched_terms": matched_terms,
                                 "reasons": reasons}
     ranked = sorted(candidates.values(), key=lambda row: (-row["score"], row["path"]))[:limit]
@@ -281,6 +320,9 @@ def locate_suspects(root: Path, trace_text: str, query: str = "", limit: int = 2
         ],
         "baselines": {
             "traceback_frame_order": list(dict.fromkeys(path for _index, path, _frame in resolved)),
+            "traceback_primary_order": list(dict.fromkeys(path for _index, path, _frame in
+                (reversed(resolved) if python_order else resolved))),
+            "traceback_order_convention": "outer-to-inner; reversed for Python traceback" if python_order else "inner-to-outer or unspecified; display order retained",
             "recent_change_order": changed,
         },
         "analysis_level": "file-level, language-neutral stack/change ranking",

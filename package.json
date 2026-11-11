@@ -5,6 +5,7 @@
   "description": "OpenClaw extension and portable Octance skill package",
   "type": "module",
   "files": [
+    "SKILL.md",
     "openclaw/index.js",
     "openclaw/README.md",
     "openclaw.plugin.json",

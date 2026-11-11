@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = ROOT / "scripts" / "octance.py"
@@ -88,6 +89,33 @@ class MultilingualInventoryTests(unittest.TestCase):
         self.assertEqual(ranked["resolved_frame_count"], 6)
         self.assertEqual(ranked["suspects"][0]["path"], "src/py.py")
         self.assertTrue(any("not a root-cause" in warning for warning in ranked["warnings"]))
+
+    def test_locate_tokenizes_path_separators_and_camel_case(self):
+        self.write("src/parser.py")
+        self.write("src/user_auth/login-handler.ts")
+        result = locate_suspects(self.root, "", query="parser user auth login handler")
+        matches = {row["path"]: set(row["matched_terms"]) for row in result["suspects"]}
+        self.assertIn("parser", matches["src/parser.py"])
+        self.assertTrue({"user", "auth", "login", "handler"} <= matches["src/user_auth/login-handler.ts"])
+
+    def test_trace_ranking_prefers_python_crash_frame_and_resolves_external_unique_suffix(self):
+        self.write("src/main.py")
+        self.write("src/parser.py")
+        self.write("cmd/api/main.go")
+        self.write("cmd/worker/main.go")
+        python_trace = ('Traceback (most recent call last):\n'
+                        '  File "src/main.py", line 10, in main\n'
+                        '  File "src/parser.py", line 44, in parse')
+        with patch("octance.source.recent_project_changes", return_value=(["src/main.py"], None)):
+            result = locate_suspects(self.root, python_trace)
+        self.assertEqual(result["suspects"][0]["path"], "src/parser.py")
+        self.assertEqual(result["baselines"]["traceback_primary_order"], ["src/parser.py", "src/main.py"])
+        go_trace = "panic: invalid\n\t/repo/workspace/cmd/api/main.go:14 +0x10"
+        parsed = parse_stack_frames(go_trace, self.root)
+        self.assertEqual(parsed[0]["path"], "/repo/workspace/cmd/api/main.go")
+        result = locate_suspects(self.root, go_trace)
+        self.assertEqual(result["resolved_frame_count"], 1)
+        self.assertEqual(result["suspects"][0]["path"], "cmd/api/main.go")
 
     def test_cli_is_read_only_and_rejects_trace_outside_project(self):
         self.write("app.py", "def run(): pass\n")

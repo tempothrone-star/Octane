@@ -4,7 +4,13 @@ Octance is a portable OpenClaw skill backed by a deterministic, Python-standard-
 
 ## Install the skill
 
-Copy the complete `octance/` directory into an OpenClaw workspace skills directory so its `SKILL.md`, references, and helper script stay together:
+For a Git-based install, the repository root now contains an OpenClaw-discoverable `SKILL.md`:
+
+```sh
+openclaw skills install git:https://github.com/tempothrone-star/Octane.git
+```
+
+For a manual workspace install, copy the complete `octance/` directory so its `SKILL.md`, references, and helper script stay together:
 
 ```sh
 mkdir -p "$OPENCLAW_WORKSPACE/skills"

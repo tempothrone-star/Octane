@@ -135,11 +135,11 @@ class OctancePhaseOneTests(unittest.TestCase):
     def test_secret_patterns_and_line_range_validation(self):
         root, _ = self.init()
         code, result = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description",
-                                   "Authorization: Bearer supersecret123 and https://alice:password@example.test/a",
+                                   "Authorization: Bearer supersecret123 and https://alice:password@example.test/a access_token=access123 client_secret=secret123 db_password=dbpass123",
                                    "--payload", '{"my_secret_value":"hidden","note":"token=abc123"}')
         self.assertEqual(code, 0, result)
         database = (root / ".octance/octance.db").read_bytes()
-        for secret in (b"supersecret123", b"alice:password", b"hidden", b"token=abc123"):
+        for secret in (b"supersecret123", b"alice:password", b"access123", b"secret123", b"dbpass123", b"hidden", b"token=abc123"):
             self.assertNotIn(secret, database)
         bad, response = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "range",
                                     "--line-range", "token=exposed")

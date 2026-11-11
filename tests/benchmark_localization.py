@@ -15,20 +15,20 @@ CASES = [
     {
         "id": "python-wrapper-vs-handler",
         "files": ["tests/harness.py", "src/handler.py", "docs/guide.md"],
-        "trace": 'File "tests/harness.py", line 10, in run\nFile "src/handler.py", line 40, in handle\nFile "src/handler.py", line 18, in decode',
-        "recent": ["docs/guide.md", "src/handler.py"], "expected": "src/handler.py",
+        "trace": 'Traceback (most recent call last):\n  File "tests/harness.py", line 10, in run\n  File "src/handler.py", line 40, in handle',
+        "recent": ["tests/harness.py"], "expected": "src/handler.py",
     },
     {
         "id": "typescript-shell-vs-router",
         "files": ["app.ts", "web/router.ts", "db/query.sql"],
-        "trace": "at dispatch (app.ts:20:3)\nat route (web/router.ts:41:8)\nat validate (web/router.ts:13:2)",
-        "recent": ["web/router.ts", "app.ts"], "expected": "web/router.ts",
+        "trace": "at validate (web/router.ts:41:8)\nat dispatch (app.ts:20:3)",
+        "recent": ["app.ts"], "expected": "web/router.ts",
     },
     {
         "id": "go-entry-vs-cache",
         "files": ["cmd/main.go", "internal/cache.go", "docs/guide.md"],
-        "trace": "cmd.main(/repo/cmd/main.go:8 +0x10)\ncache.get(/repo/internal/cache.go:31 +0x10)\ncache.put(/repo/internal/cache.go:52 +0x10)",
-        "recent": ["docs/guide.md", "cmd/main.go"], "expected": "internal/cache.go",
+        "trace": "cache.get(/repo/internal/cache.go:31 +0x10)\ncmd.main(/repo/cmd/main.go:8 +0x10)",
+        "recent": ["cmd/main.go"], "expected": "internal/cache.go",
     },
 ]
 
@@ -52,11 +52,13 @@ def main() -> int:
             with patch("octance.source.recent_project_changes", return_value=(case["recent"], None)):
                 result = locate_suspects(root, case["trace"])
             ranked = [item["path"] for item in result["suspects"]]
-            traceback_baseline = result["baselines"]["traceback_frame_order"]
+            traceback_baseline = result["baselines"]["traceback_primary_order"]
             recent_baseline = result["baselines"]["recent_change_order"]
             outcomes.append({
                 "case": case["id"], "expected_suspect": case["expected"],
-                "ranked": ranked, "traceback_baseline": traceback_baseline,
+                "ranked": ranked, "traceback_display_order": result["baselines"]["traceback_frame_order"],
+                "traceback_baseline": traceback_baseline,
+                "traceback_order_convention": result["baselines"]["traceback_order_convention"],
                 "recent_change_baseline": recent_baseline,
                 "ranked_top1": bool(ranked and ranked[0] == case["expected"]),
                 "traceback_top1": bool(traceback_baseline and traceback_baseline[0] == case["expected"]),
@@ -81,6 +83,7 @@ def main() -> int:
         "limitations": [
             "Three synthetic fixtures are a mechanics regression check, not a representative real-project dataset.",
             "Expected files are authored by the fixture; no independent root-cause labels or replayed checks are present.",
+            "Each trace has one frame per candidate and uses realistic order conventions: Python outer-to-inner, Node/Go innermost-first.",
             "Results do not establish localization quality on user projects or across the listed languages.",
         ],
     }

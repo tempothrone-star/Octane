@@ -6,12 +6,16 @@ import json
 import re
 import sqlite3
 import subprocess
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 from urllib.parse import urlsplit, urlunsplit
+
+
+_INITIALIZE_LOCK = threading.RLock()
 
 
 def _id(prefix: str) -> str:
@@ -221,6 +225,12 @@ class ProjectIntelligence:
             connection.close()
 
     def _initialize(self) -> None:
+        # SQLite's journal-mode change and schema migrations must not race when
+        # multiple API instances initialize database files concurrently.
+        with _INITIALIZE_LOCK:
+            self._initialize_database()
+
+    def _initialize_database(self) -> None:
         with self._session() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(_SCHEMA)
@@ -511,6 +521,8 @@ class ProjectIntelligence:
 
     def link_evidence(self, evidence_id: str, related_evidence_id: str, relationship: str = "supports",
                       agent_id: str | None = None) -> None:
+        if evidence_id == related_evidence_id:
+            raise ValueError("evidence cannot be linked to itself")
         if relationship not in {"supports", "contradicts", "context", "supersedes", "verifies"}:
             raise ValueError("invalid evidence relationship")
         with self._transaction() as db:

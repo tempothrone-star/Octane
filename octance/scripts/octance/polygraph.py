@@ -12,7 +12,8 @@ from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from .source import LANGUAGES, source_inventory
+from . import ast_backend
+from .source import LANGUAGE_IMPORT_SYNTAX, LANGUAGES, source_inventory
 
 # Patterns intentionally capture only common static dependency declarations.
 _PATTERNS = {
@@ -46,10 +47,14 @@ _PATTERNS = {
     "swift": [re.compile(r"(?m)^\s*import\s+[A-Za-z_][\w]*")],
 }
 
-_EXTENSIONS = {
-    language: sorted(ext for ext, value in LANGUAGES.items() if value == language)
-    for language in set(LANGUAGES.values())
-}
+def _language_extensions(language: str) -> List[str]:
+    return sorted({extension.lower() for extension, owner in LANGUAGES.items() if owner == language})
+
+
+_GENERIC_IMPORT_PATTERNS = (
+    re.compile(r"(?m)^\s*(?:import|include|require(?:_once|_relative)?|use|mod|source|load)\s*(?:\(\s*)?[\"']([^\"'\n]+)[\"']"),
+    re.compile(r"(?m)^\s*(?:import|use|mod)\s+([A-Za-z_][\w./:-]*)\s*(?:;|$)"),
+)
 
 
 def _tokens(text: str, hash_comments: bool = False, slash_regex: bool = False) -> List[Tuple[str, str, int]]:
@@ -253,29 +258,57 @@ def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
                 if item:
                     results.append(item)
         i += 1
-    return results
+    for pattern in _GENERIC_IMPORT_PATTERNS:
+        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+                       for match in pattern.finditer(text))
+    syntax = LANGUAGE_IMPORT_SYNTAX.get(language, {})
+    quoted_keywords = syntax.get("quoted", ())
+    module_keywords = syntax.get("module", ())
+    if quoted_keywords:
+        keywords = "|".join(re.escape(keyword) for keyword in quoted_keywords)
+        pattern = re.compile(r"(?m)^\s*(?:" + keywords + r")\s*(?:\(\s*)?[\"']([^\"'\n]+)[\"']")
+        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+                       for match in pattern.finditer(text))
+    if module_keywords:
+        keywords = "|".join(re.escape(keyword) for keyword in module_keywords)
+        pattern = re.compile(r"(?m)^\s*(?:" + keywords + r")\s+([A-Za-z_][\w./:-]*)\s*(?:;|$)")
+        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+                       for match in pattern.finditer(text))
+    if syntax.get("from_import"):
+        pattern = re.compile(r"(?m)^\s*from\s+([A-Za-z_][\w./:-]*)\s+import\b")
+        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+                       for match in pattern.finditer(text))
+    return list(dict.fromkeys(results))
 
 
-def _python_imports(path: str, text: str) -> Tuple[List[Tuple[str, int]], int]:
+def _python_imports(path: str, text: str) -> Tuple[List[Tuple[str, int, int, bool]], int]:
     try:
         tree = ast.parse(text, filename=path)
     except (SyntaxError, ValueError):
         return [], 1
-    results: List[Tuple[str, int]] = []
+    results: List[Tuple[str, int, int, bool]] = []
+    group = 0
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            results.extend((alias.name, node.lineno) for alias in node.names)
+            for alias in node.names:
+                results.append((alias.name, node.lineno, group, False))
+                group += 1
         elif isinstance(node, ast.ImportFrom):
             base = ("." * node.level) + (node.module or "")
             if node.module:
-                results.append((base, node.lineno))
+                results.append((base, node.lineno, group, False))
+                results.extend((base + "." + alias.name, node.lineno, group, True)
+                               for alias in node.names if alias.name != "*")
+                group += 1
             elif node.level:
                 # `from . import config` names a sibling module candidate; do not
                 # accidentally reinterpret it as a root-level `config.py`.
-                results.extend((base + alias.name, node.lineno)
+                results.extend((base + alias.name, node.lineno, group, False)
                                for alias in node.names if alias.name != "*")
+                group += 1
             elif base:
-                results.append((base, node.lineno))
+                results.append((base, node.lineno, group, False))
+                group += 1
     return results, 0
 
 
@@ -376,6 +409,23 @@ def _candidate_paths(spec: str, source_path: str, language: str, root: Path,
                 continue
             if re.search(r"(?m)^\s*(?:package|namespace)\s+" + re.escape(dotted) + r"(?:\s|;|$)", text):
                 candidates.append(path)
+    else:
+        # Portable fallback for unregistered grammars: resolve literal paths and
+        # dotted module names against adjacent and project-root source files.
+        module = spec.replace("\\", "/").strip().rstrip("/")
+        bases = [module]
+        if "." in module and "/" not in module and PurePosixPath(module).suffix == "":
+            bases.append(module.replace(".", "/"))
+        extensions = _language_extensions(language)
+        for raw_base in bases:
+            for prefix in (source_dir, PurePosixPath(".")):
+                base = (prefix / raw_base).as_posix()
+                candidates.append(base)
+                for extension in extensions:
+                    candidates.extend((base + extension,
+                                       (PurePosixPath(base) / ("mod" + extension)).as_posix(),
+                                       (PurePosixPath(base) / ("index" + extension)).as_posix(),
+                                       (PurePosixPath(base) / ("__init__" + extension)).as_posix()))
     # Normalize imports such as ../shared/header.h and resolve only files already
     # inside the bounded inventory. Never use a reference to read outside root.
     seen: Set[str] = set()
@@ -392,12 +442,18 @@ def _candidate_paths(spec: str, source_path: str, language: str, root: Path,
 
 def build_dependency_graph(root: Path, max_files: int = 100000,
                            max_file_bytes: int = 5 * 1024 * 1024,
-                           max_total_bytes: int = 100 * 1024 * 1024) -> Dict[str, Any]:
+                           max_total_bytes: int = 100 * 1024 * 1024,
+                           parser: str = "auto") -> Dict[str, Any]:
     """Extract a bounded, best-effort internal file dependency graph.
 
-    This deliberately does not attempt complete language parsing. It reports
-    unresolved references and never turns a dependency edge into a cause claim.
+    The optional Tree-sitter backend supplies concrete syntax trees for bundled
+    grammars; Python uses its native AST. Missing grammars fall back to static
+    import recognizers. No source is executed and edges are not cause claims.
     """
+    if parser not in {"auto", "heuristic", "tree-sitter"}:
+        raise ValueError("parser must be auto, heuristic, or tree-sitter")
+    if parser == "tree-sitter" and not ast_backend.available():
+        raise ValueError("Tree-sitter is optional; install Octane with the [ast] extra")
     root = root.resolve()
     inventory = source_inventory(root, max_files, max_file_bytes)
     if not 1 <= max_total_bytes <= 1024 * 1024 * 1024:
@@ -424,20 +480,48 @@ def build_dependency_graph(root: Path, max_files: int = 100000,
     edges: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []
     parse_errors = 0
+    tree_sitter_parse_errors = 0
+    tree_sitter_used: Set[str] = set()
+    tree_sitter_files = 0
+    heuristic_languages: Set[str] = set()
     for path, (language, text) in contents.items():
+        edge_basis = "recognized import/include pattern"
         if language == "python":
             imports, errors = _python_imports(path, text)
             parse_errors += errors
+            edge_basis = "Python stdlib AST"
         else:
-            imports = _heuristic_imports(language, text)
-        seen_specs: Set[Tuple[str, int]] = set()
-        for spec, line in imports:
-            marker = (spec, line)
-            if marker in seen_specs:
-                continue
-            seen_specs.add(marker)
-            targets = _candidate_paths(spec, path, language, root, contents, module, java_map)
-            if targets:
+            parsed = ast_backend.parse_imports(language, path, text) if parser != "heuristic" else None
+            if parsed is not None:
+                references, has_error, _root_type = parsed
+                tree_sitter_used.add(language)
+                tree_sitter_files += 1
+                if has_error:
+                    parse_errors += 1
+                    tree_sitter_parse_errors += 1
+                if references:
+                    edge_basis = "Tree-sitter syntax tree"
+                else:
+                    references = _heuristic_imports(language, text)
+                    heuristic_languages.add(language)
+            else:
+                references = _heuristic_imports(language, text)
+                heuristic_languages.add(language)
+            imports = [(spec, line, index, False)
+                       for index, (spec, line) in enumerate(references)]
+        grouped: Dict[int, List[Tuple[str, int, bool]]] = {}
+        for spec, line, group, fallback in imports:
+            grouped.setdefault(group, []).append((spec, line, fallback))
+        for references in grouped.values():
+            resolved_references = []
+            primary = next((item for item in references if not item[2]), references[0])
+            any_targets = False
+            for spec, line, _fallback in references:
+                targets = _candidate_paths(spec, path, language, root, contents, module, java_map)
+                if targets:
+                    any_targets = True
+                    resolved_references.append((spec, line, targets))
+            for spec, line, targets in resolved_references:
                 for target in targets:
                     if target == path:
                         continue
@@ -447,9 +531,10 @@ def build_dependency_graph(root: Path, max_files: int = 100000,
                         "source_language": language, "target_language": target_language,
                         "cross_language": language != target_language,
                         "line": line, "reference": spec,
-                        "basis": "Python AST" if language == "python" else "recognized import/include pattern",
+                        "basis": edge_basis,
                     })
-            else:
+            if not any_targets:
+                spec, line, _fallback = primary
                 unresolved.append({"source": path, "language": language, "line": line, "reference": spec})
     # Remove duplicate equivalent edges while preserving deterministic order.
     deduped: Dict[Tuple[str, str, str, int], Dict[str, Any]] = {}
@@ -476,11 +561,16 @@ def build_dependency_graph(root: Path, max_files: int = 100000,
                    "max_total_bytes": max_total_bytes},
         "parser_coverage": {
             "full_stdlib_parser": ["python"],
-            "heuristic_import_patterns": sorted(_PATTERNS),
-            "no_full_parser": sorted(set(languages) - {"python"} - set(_PATTERNS)),
+            "tree_sitter": {"requested": parser, "package_available": ast_backend.available(),
+                            "files_parsed": tree_sitter_files, "languages_used": sorted(tree_sitter_used),
+                            "heuristic_fallback_languages": sorted(heuristic_languages),
+                            "parse_error_files": tree_sitter_parse_errors},
+            "heuristic_import_patterns": sorted(set(_PATTERNS) | {"generic-line-fallback"}),
+            "generic_line_fallback": ["import", "include", "require", "use", "mod", "source", "load", "from-import"],
+            "no_full_parser": sorted(set(languages) - {"python"} - tree_sitter_used),
         },
         "warnings": [
-            "This is a best-effort file dependency graph, not a full language parser or complete call graph.",
+            "This is a best-effort file dependency graph, not a semantic parser for every language or a complete call graph.",
             "Dynamic imports, macros, conditional compilation, generated code, aliases, and unresolved module conventions may be missed or misresolved.",
             "A dependency edge does not establish runtime reachability or defect causation.",
         ],

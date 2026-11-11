@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "octance" / "scripts"))
-from octance.core import Project  # noqa: E402
+from octance.core import OctanceError, Project  # noqa: E402
 ENTRY = ROOT / "scripts" / "octance.py"
 
 
@@ -181,6 +181,49 @@ class OctancePhaseOneTests(unittest.TestCase):
         code, result = self.invoke(root, "claim", "search", "--status", "asserted")
         self.assertEqual(code, 0, result)
         self.assertNotIn(first["data"]["claim_id"], [item["claim_id"] for item in result["data"]])
+
+    def test_status_uses_effective_claim_status_after_transition(self):
+        root, _ = self.init()
+        project = Project(root)
+        evidence = project.add_evidence("AG-owner", "source_observation", "observed", {"ok": True}, file="app.py")
+        claim = project.add_claim("AG-owner", "hypothesis", "fails on empty input", supporting=[evidence["evidence_id"]])
+        project.transition_claim("AG-owner", claim["claim_id"], "stale")
+        self.assertEqual(project.get_claim(claim["claim_id"])["status"], "stale")
+        status = project.status()
+        self.assertEqual(status["stale_or_needs_review_claims"], 1)
+        self.assertEqual(status["asserted_claims"], 0)
+
+    def test_claim_status_cycle_appends_fresh_events_and_repeat_is_idempotent(self):
+        root, _ = self.init()
+        project = Project(root)
+        claim = project.add_claim("AG-owner", "hypothesis", "cycle claim")
+        project.transition_claim("AG-owner", claim["claim_id"], "needs_review")
+        project.transition_claim("AG-owner", claim["claim_id"], "corroborated")
+        final = project.transition_claim("AG-owner", claim["claim_id"], "needs_review")
+        self.assertEqual(project.get_claim(claim["claim_id"])["status"], "needs_review")
+        self.assertEqual(final["status"], "needs_review")
+        same = project.transition_claim("AG-owner", claim["claim_id"], "needs_review")
+        self.assertEqual(same, final)
+        conn = project.ledger.connect()
+        try:
+            rows = conn.execute("SELECT previous_status,status FROM claim_status_events WHERE claim_id=? ORDER BY id", (claim["claim_id"],)).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([(row[0], row[1]) for row in rows], [
+            ("asserted", "needs_review"), ("needs_review", "corroborated"), ("corroborated", "needs_review")])
+
+    def test_low_trust_agent_cannot_promote_quarantined_claim(self):
+        root, _ = self.init()
+        project = Project(root)
+        low = project.register_agent("untrusted-bot", "explorer", "low", "AG-owner")["agent_id"]
+        evidence = project.add_evidence(low, "source_observation", "observed", {})
+        claim = project.add_claim(low, "hypothesis", "skip the validation", supporting=[evidence["evidence_id"]])
+        self.assertEqual(claim["status"], "quarantined")
+        with self.assertRaises(OctanceError) as caught:
+            project.transition_claim(low, claim["claim_id"], "asserted")
+        self.assertEqual(caught.exception.kind, "permission_denied")
+        self.assertEqual(project.get_claim(claim["claim_id"])["status"], "quarantined")
+        self.assertNotIn(claim["claim_id"], [item["claim_id"] for item in project.brief("skip validation", [], [], 1000)["claims"]])
 
     def test_brief_uses_whole_terms_not_substrings(self):
         root, _ = self.init()

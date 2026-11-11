@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 import sqlite3
 
-if sys.version_info < (3, 11):
-    raise unittest.SkipTest("the native PIL plugin suite requires Python 3.11+")
+if sys.version_info < (3, 10):
+    raise unittest.SkipTest("the native PIL plugin suite requires Python 3.10+")
 
 from octane import ExplorationProfile, ExplorationScheduler, ProjectIntelligence, PythonAdapter, Tentacle, WorkspaceManager
 from octane.db import _SCHEMA
@@ -117,6 +117,11 @@ class PILTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertEqual(len(self.database.search_evidence(self.project["id"], evidence_type="concurrent")), 8)
 
+    def test_link_evidence_rejects_self_link_with_specific_error(self):
+        evidence = self.database.submit_evidence(self.project["id"], "observation", {"value": 1}, "observed value")
+        with self.assertRaisesRegex(ValueError, "evidence cannot be linked to itself"):
+            self.database.link_evidence(evidence["id"], evidence["id"])
+
     def test_verification_requires_separate_observed_evidence(self):
         reviewer = self.database.register_agent(self.project["id"], "verifier", "tester", permissions=["verify_evidence"])
         finding = self.database.submit_evidence(self.project["id"], "static_finding", {"issue": "candidate"}, "candidate finding")
@@ -217,8 +222,13 @@ class PILTests(unittest.TestCase):
         package.mkdir()
         (package / "__init__.py").write_text("", encoding="utf-8")
         (package / "util.py").write_text("def leaf():\n    return 1\n", encoding="utf-8")
+        (package / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
         (package / "client.py").write_text(
             "from . import util\n\ndef outer():\n    def inner():\n        return util.leaf()\n    return inner()\n", encoding="utf-8")
+        namespace = self.root / "ns_pkg"
+        namespace.mkdir()
+        (namespace / "worker.py").write_text("VALUE = 2\n", encoding="utf-8")
+        (self.root / "app.py").write_text("from pkg import helper\nfrom ns_pkg import worker\n", encoding="utf-8")
         adapter = PythonAdapter()
         first = adapter.scan(self.database, self.project["id"], self.root)
         count_before = len(self.database.search_evidence(self.project["id"], evidence_type="file_scan"))
@@ -227,10 +237,14 @@ class PILTests(unittest.TestCase):
         graph = self.database.query_graph(self.project["id"])
         nodes = {node["id"]: node["node_key"] for node in graph["nodes"]}
         self.assertTrue(any(edge["kind"] == "imports" and nodes[edge["target_id"]] == "file:pkg/util.py" for edge in graph["edges"]))
+        self.assertTrue(any(edge["kind"] == "imports" and nodes[edge["source_id"]] == "file:app.py"
+                            and nodes[edge["target_id"]] == "file:pkg/helper.py" for edge in graph["edges"]))
+        self.assertTrue(any(edge["kind"] == "imports" and nodes[edge["source_id"]] == "file:app.py"
+                            and nodes[edge["target_id"]] == "file:ns_pkg/worker.py" for edge in graph["edges"]))
         calls = [(nodes[edge["source_id"]], nodes[edge["target_id"]]) for edge in graph["edges"] if edge["kind"] == "calls"]
         self.assertIn(("symbol:pkg/client.py:outer.inner", "symbol:pkg/util.py:leaf"), calls)
         self.assertNotIn(("symbol:pkg/client.py:outer", "symbol:pkg/util.py:leaf"), calls)
-        self.assertEqual(first["files_scanned"], 3)
+        self.assertEqual(first["files_scanned"], 6)
 
     def test_atomic_graph_update_records_confidence_and_provenance(self):
         agent = self.database.register_agent(self.project["id"], "graph-writer", "explorer", permissions=["update_graph"])

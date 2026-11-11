@@ -43,11 +43,14 @@ class MultilingualInventoryTests(unittest.TestCase):
         self.write("native/lib.rs")
         self.write("native/calc.cpp")
         self.write("db/schema.sql")
+        self.write("embedded/controller.zig")
+        self.write("batch/build.ps1")
+        self.write("science/model.f90")
         self.write("docs/api.xml")
         self.write("node_modules/pkg/index.js")
         self.write("target/generated.rs")
         result = source_inventory(self.root)
-        self.assertEqual(result["source_files"], 8)
+        self.assertEqual(result["source_files"], 11)
         self.assertEqual(result["languages"]["python"], 1)
         self.assertEqual(result["languages"]["typescript"], 1)
         self.assertEqual(result["languages"]["javascript"], 1)
@@ -56,6 +59,9 @@ class MultilingualInventoryTests(unittest.TestCase):
         self.assertEqual(result["languages"]["rust"], 1)
         self.assertEqual(result["languages"]["cpp"], 1)
         self.assertEqual(result["languages"]["sql"], 1)
+        self.assertEqual(result["languages"]["zig"], 1)
+        self.assertEqual(result["languages"]["powershell"], 1)
+        self.assertEqual(result["languages"]["fortran"], 1)
         self.assertEqual(result["unsupported_extensions"][".xml"], 1)
         self.assertEqual(result["analysis_level"], "extension inventory only; no language parser or execution")
         self.assertFalse(any("node_modules" in item["path"] for item in result["files"]))
@@ -106,7 +112,7 @@ class MultilingualInventoryTests(unittest.TestCase):
         python_trace = ('Traceback (most recent call last):\n'
                         '  File "src/main.py", line 10, in main\n'
                         '  File "src/parser.py", line 44, in parse')
-        with patch("octance.source.recent_project_changes", return_value=(["src/main.py"], None)):
+        with patch("octance.source.recent_project_changes", return_value=([], None)):
             result = locate_suspects(self.root, python_trace)
         self.assertEqual(result["suspects"][0]["path"], "src/parser.py")
         self.assertEqual(result["baselines"]["traceback_primary_order"], ["src/parser.py", "src/main.py"])
@@ -116,6 +122,38 @@ class MultilingualInventoryTests(unittest.TestCase):
         result = locate_suspects(self.root, go_trace)
         self.assertEqual(result["resolved_frame_count"], 1)
         self.assertEqual(result["suspects"][0]["path"], "cmd/api/main.go")
+
+    def test_trace_proximity_gradually_ranks_frames_near_python_fault_site(self):
+        for name in ("f1.py", "f2.py", "f3.py", "f4.py"):
+            self.write(name)
+        trace = "Traceback (most recent call last):\n" + "\n".join(
+            '  File "%s", line %d, in run' % (name, index)
+            for index, name in enumerate(("f1.py", "f2.py", "f3.py", "f4.py"), 1))
+        result = locate_suspects(self.root, trace)
+        self.assertEqual([row["path"] for row in result["suspects"]], ["f4.py", "f3.py", "f2.py", "f1.py"])
+        self.assertEqual([row["score"] for row in result["suspects"]], [80.0, 60.0, 53.333, 50.0])
+
+    def test_project_language_map_extends_inventory_graph_and_generic_trace_support(self):
+        self.write("src/main.qz", 'fetch "helper"\nattach helper\nfrom helper import member\n')
+        self.write("src/helper.qz", "module helper\n")
+        code, init = self.invoke("init", "--project-root", str(self.root))
+        self.assertEqual(code, 0, init)
+        config = self.root / ".octance" / "languages.json"
+        config.write_text(json.dumps({"languages": {"quartz": {
+            "extensions": [".qz"], "quoted_import_keywords": ["fetch"],
+            "module_import_keywords": ["attach"], "from_import": True}}}), encoding="utf-8")
+        code, inventory = self.invoke("languages", "--language-config", ".octance/languages.json")
+        self.assertEqual(code, 0, inventory)
+        self.assertEqual(inventory["data"]["languages"]["quartz"], 2)
+        code, graph = self.invoke("graph", "--language-config", ".octance/languages.json")
+        self.assertEqual(code, 0, graph)
+        self.assertIn(("src/main.qz", "src/helper.qz"),
+                      {(edge["source"], edge["target"]) for edge in graph["data"]["edges"]})
+        self.write("failure.log", "at handler (src/main.qz:17)\n")
+        code, located = self.invoke("locate", "--trace-file", "failure.log",
+                                    "--language-config", ".octance/languages.json")
+        self.assertEqual(code, 0, located)
+        self.assertEqual(located["data"]["suspects"][0]["path"], "src/main.qz")
 
     def test_cli_is_read_only_and_rejects_trace_outside_project(self):
         self.write("app.py", "def run(): pass\n")

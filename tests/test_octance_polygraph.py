@@ -32,7 +32,7 @@ class PolyglotDependencyGraphTests(unittest.TestCase):
     def test_project_internal_dependencies_across_languages(self):
         self.write("py/main.py", "from . import helper\nimport json\n")
         self.write("py/helper.py", "def normalize(value): return value\n")
-        self.write("web/app.js", "import { view } from './view';\n")
+        self.write("web/app.js", "/* import fake from './missing'; */\nconst text = \"require('./not-a-dependency')\";\nimport {\n  view\n} from './view';\n")
         self.write("web/view.ts", "export function view() {}\n")
         self.write("native/bridge.cpp", '#include "../c/api.h"\n')
         self.write("c/api.h", "int api(void);\n")
@@ -41,7 +41,7 @@ class PolyglotDependencyGraphTests(unittest.TestCase):
         self.write("internal/cache/cache.go", "package cache\n")
         self.write("java/Use.java", "package client;\nimport model.Main;\n")
         self.write("java/model/Main.java", "package model;\nclass Main {}\n")
-        self.write("rust/lib.rs", "mod util;\n")
+        self.write("rust/lib.rs", "mod util;\nuse crate::util::helper;\n// use crate::missing;\n")
         self.write("rust/util.rs", "pub fn helper() {}\n")
         self.write("node_modules/pkg/internal.js", "// excluded\n")
 
@@ -59,7 +59,10 @@ class PolyglotDependencyGraphTests(unittest.TestCase):
         self.assertEqual(graph["cross_language_edge_count"], 2)
         self.assertIn("python", graph["parser_coverage"]["full_stdlib_parser"])
         self.assertIn("javascript", graph["parser_coverage"]["heuristic_import_patterns"])
-        self.assertTrue(any(row["reference"] == "json" for row in graph["unresolved_references"]))
+        unresolved_specs = {row["reference"] for row in graph["unresolved_references"]}
+        self.assertIn("json", unresolved_specs)
+        self.assertNotIn("./missing", unresolved_specs)
+        self.assertNotIn("./not-a-dependency", unresolved_specs)
         self.assertFalse(any("node_modules" in edge["source"] for edge in graph["edges"]))
 
     def test_graph_limits_and_cli_input_errors(self):

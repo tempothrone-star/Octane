@@ -12,7 +12,7 @@ The bundled skill has portable `SKILL.md`/`scripts`/`references` structure and d
 
 Runner: Python standard-library `unittest`. The Octance Phase 1 tests exercise project identity/isolation, hash-chain edit/deletion/reorder detection, idempotency, immutability, replay comparison, role permissions, trust quarantine, secret redaction, schema-newer refusal, FTS5/LIKE search, concurrent process writers, transaction rollback, bounded brief, doctor reporting, and explicit `.gitignore` consent.
 
-Final full-suite command: `PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v` — **Ran 42 tests in 6.854s; OK**. This includes 4 multilingual inventory/trace-ranking tests, 2 polyglot dependency-graph tests, 11 Octance ledger tests, and 25 retained legacy PIL/plugin tests. The legacy suite verifies that archived code still works, not that its capabilities belong to Octance.
+Final full-suite command: `PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v` — **Ran 42 tests in 6.835s; OK**. This includes 4 multilingual inventory/trace-ranking tests, 2 polyglot dependency-graph tests, 11 Octance ledger tests, and 25 retained legacy PIL/plugin tests. The legacy suite verifies that archived code still works, not that its capabilities belong to Octance.
 
 ### Preliminary synthetic localization comparison
 

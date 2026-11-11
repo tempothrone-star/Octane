@@ -52,6 +52,178 @@ _EXTENSIONS = {
 }
 
 
+def _tokens(text: str, hash_comments: bool = False) -> List[Tuple[str, str, int]]:
+    """Small lexical scanner for dependency declarations, not a full parser."""
+    tokens: List[Tuple[str, str, int]] = []
+    i, line, size = 0, 1, len(text)
+    while i < size:
+        start = i
+        char = text[i]
+        if char.isspace():
+            i += 1
+            while i < size and text[i].isspace():
+                i += 1
+            line += text[start:i].count("\n")
+            continue
+        if text.startswith("//", i) or (hash_comments and char == "#"):
+            end = text.find("\n", i)
+            i = size if end < 0 else end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = size if end < 0 else end + 2
+            line += text[start:i].count("\n")
+            continue
+        if char in ("'", '"', "`"):
+            quote = char
+            i += 1
+            value_start = i
+            escaped = False
+            while i < size:
+                current = text[i]
+                if escaped:
+                    escaped = False
+                    i += 1
+                    continue
+                if current == "\\":
+                    escaped = True
+                    i += 1
+                    continue
+                if current == quote:
+                    break
+                i += 1
+            value = text[value_start:i]
+            if i < size:
+                i += 1
+            tokens.append(("string", value, line))
+            line += text[start:i].count("\n")
+            continue
+        if char.isalpha() or char in "_$":
+            i += 1
+            while i < size and (text[i].isalnum() or text[i] in "_$"):
+                i += 1
+            tokens.append(("identifier", text[start:i], line))
+            continue
+        if text.startswith("::", i):
+            tokens.append(("punct", "::", line))
+            i += 2
+        else:
+            tokens.append(("punct", char, line))
+            i += 1
+    return tokens
+
+
+def _quoted_token(token: Tuple[str, str, int]) -> Optional[Tuple[str, int]]:
+    return (token[1], token[2]) if token[0] == "string" else None
+
+
+def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
+    """Recognize static dependency forms while ignoring comments and literals."""
+    if language in ("c", "cpp"):
+        # The anchored directive form avoids mistaking strings for includes.
+        clean = re.sub(r"(?m)^\s*//.*$", "", text)
+        clean = re.sub(r"/\*.*?\*/", lambda match: "\n" * match.group(0).count("\n"), clean, flags=re.S)
+        return [(match.group(1), clean.count("\n", 0, match.start()) + 1)
+                for match in re.finditer(r'(?m)^\s*#\s*include\s*"([^"\n]+)"', clean)]
+    tokens = _tokens(text, hash_comments=language in ("ruby",))
+    results: List[Tuple[str, int]] = []
+    i = 0
+    while i < len(tokens):
+        kind, value, line = tokens[i]
+        next_token = tokens[i + 1] if i + 1 < len(tokens) else ("", "", line)
+        if language in ("javascript", "typescript"):
+            if kind == "identifier" and value in ("import", "export"):
+                j = i + 1
+                if value == "import" and next_token[1] == "(" and j + 1 < len(tokens):
+                    item = _quoted_token(tokens[j + 1])
+                    if item:
+                        results.append(item)
+                elif next_token[0] == "string":
+                    item = _quoted_token(next_token)
+                    if item:
+                        results.append(item)
+                else:
+                    while j < len(tokens) and j < i + 100 and tokens[j][1] != ";":
+                        if j > i + 1 and tokens[j][0] == "identifier" and tokens[j][1] in ("import", "export"):
+                            break
+                        if tokens[j][0] == "identifier" and tokens[j][1] == "from" and j + 1 < len(tokens):
+                            item = _quoted_token(tokens[j + 1])
+                            if item:
+                                results.append(item)
+                            break
+                        j += 1
+            elif kind == "identifier" and value == "require" and next_token[1] == "(" and i + 2 < len(tokens):
+                item = _quoted_token(tokens[i + 2])
+                if item:
+                    results.append(item)
+        elif language == "go":
+            if kind == "identifier" and value == "import":
+                if next_token[1] == "(":
+                    j = i + 2
+                    while j < len(tokens) and tokens[j][1] != ")":
+                        item = _quoted_token(tokens[j])
+                        if item:
+                            results.append(item)
+                        j += 1
+                else:
+                    item = _quoted_token(next_token)
+                    if item:
+                        results.append(item)
+        elif language == "java":
+            if kind == "identifier" and value == "import":
+                j = i + 1
+                if j < len(tokens) and tokens[j][1] == "static":
+                    j += 1
+                parts: List[str] = []
+                while j < len(tokens) and tokens[j][1] != ";":
+                    if tokens[j][0] == "identifier" or tokens[j][1] == "*":
+                        parts.append(tokens[j][1])
+                    j += 1
+                if parts:
+                    results.append((".".join(parts).replace(".*", ".*"), line))
+        elif language == "rust":
+            if kind == "identifier" and value == "mod" and next_token[0] == "identifier":
+                if i + 2 < len(tokens) and tokens[i + 2][1] == ";":
+                    results.append((next_token[1], line))
+            elif kind == "identifier" and value == "use":
+                j, parts = i + 1, []
+                while j < len(tokens) and tokens[j][1] != ";":
+                    if tokens[j][0] == "identifier" or tokens[j][1] == "::":
+                        parts.append(tokens[j][1])
+                    j += 1
+                if parts:
+                    spec = "".join(parts)
+                    for prefix in ("crate::", "self::", "super::"):
+                        if spec.startswith(prefix):
+                            spec = spec[len(prefix):]
+                    results.append((spec, line))
+        elif language in ("csharp", "kotlin", "scala", "swift"):
+            if kind == "identifier" and value in ("using", "import"):
+                j, parts = i + 1, []
+                while j < len(tokens) and tokens[j][1] not in (";", "{"):
+                    if tokens[j][0] == "identifier" or tokens[j][1] == "*":
+                        parts.append(tokens[j][1])
+                    j += 1
+                if parts:
+                    results.append((".".join(parts), line))
+        elif language == "php":
+            if kind == "identifier" and value.lower() in ("require", "require_once", "include", "include_once"):
+                j = i + 1
+                while j < len(tokens) and j < i + 4 and tokens[j][1] not in (";", ")"):
+                    item = _quoted_token(tokens[j])
+                    if item:
+                        results.append(item)
+                        break
+                    j += 1
+        elif language == "ruby":
+            if kind == "identifier" and value in ("require", "require_relative"):
+                item = _quoted_token(next_token)
+                if item:
+                    results.append(item)
+        i += 1
+    return results
+
+
 def _python_imports(path: str, text: str) -> Tuple[List[Tuple[str, int]], int]:
     try:
         tree = ast.parse(text, filename=path)
@@ -216,11 +388,7 @@ def build_dependency_graph(root: Path, max_files: int = 100000,
             imports, errors = _python_imports(path, text)
             parse_errors += errors
         else:
-            imports = []
-            for pattern in _PATTERNS.get(language, []):
-                imports.extend((match.group(1) if match.lastindex else match.group(0).split()[-1],
-                                text.count("\n", 0, match.start()) + 1)
-                               for match in pattern.finditer(text))
+            imports = _heuristic_imports(language, text)
         seen_specs: Set[Tuple[str, int]] = set()
         for spec, line in imports:
             marker = (spec, line)

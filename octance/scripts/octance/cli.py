@@ -113,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
     link_claim.add_argument("--relation", choices=("supports", "contradicts", "depends_on", "conflicts_with"), required=True)
     link_claim.add_argument("--idempotency-key")
     _common(link_claim)
+    transition_claim = claim_commands.add_parser("status", help="append a claim status transition")
+    transition_claim.add_argument("claim_id")
+    transition_claim.add_argument("--status", choices=sorted(CLAIM_STATUSES), required=True)
+    transition_claim.add_argument("--idempotency-key")
+    _common(transition_claim)
 
     brief = commands.add_parser("brief", help="retrieve compact, ranked project context")
     brief.add_argument("--task", required=True)
@@ -196,10 +201,11 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         root = resolve_project_root(explicit=args.project_root)
         result = init_project(root, args.update_gitignore, args.trust_tier)
         return _response(result, result.pop("warnings", []), ["Run `python3 scripts/octance.py status` to inspect the new ledger"])
-    root = discover_root()
     if args.command == "doctor":
+        root = resolve_project_root()
         result = diagnose_project(root)
         return _response(result, result.get("warnings", []))
+    root = discover_root()
     project = Project(root)
     agent_id = project.agent_id(getattr(args, "agent", None))
     actor = project.ledger.get_agent(agent_id, project.project_id)
@@ -306,6 +312,8 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
             return _response(project.add_claim(agent_id, args.kind, args.text, args.evidence,
                                                args.contradicting_evidence, args.depends_on, args.idempotency_key),
                              next_steps=["Use only supported evidence; a claim is not a verified result"])
+        if args.claim_command == "status":
+            return _response(project.transition_claim(agent_id, args.claim_id, args.status, args.idempotency_key))
         if args.claim_command == "get":
             connection = project.ledger.connect()
             try:

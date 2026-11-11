@@ -11,7 +11,14 @@ mkdir -p "$OPENCLAW_WORKSPACE/skills"
 cp -R ./octance "$OPENCLAW_WORKSPACE/skills/"
 ```
 
-Start a new OpenClaw session or refresh the skill catalog, then check that `octance` appears in `openclaw skills list`. This repository does not publish or install the skill to ClawHub automatically.
+Start a new OpenClaw session or refresh the skill catalog, then check that `octance` appears in `openclaw skills list`. This repository does not publish the skill to ClawHub automatically. For users who need the optional native plugin tools as well, install the declared npm dependency and link the repository package:
+
+```sh
+npm install --omit=peer
+openclaw plugins install --link . --force
+```
+
+The plugin manifest bundles this same `octance/` skill. The native plugin tools are optional, use a separate PIL-backed store, and require Node.js and Python 3.11+; the portable skill CLI remains standard-library-only and supports Python 3.9+.
 
 The skill declares `python3` as its only binary requirement. Keep the target project as the CLI working directory. From this repository, use `python3 scripts/octance.py`; from a separately installed skill, invoke `python3 "$OPENCLAW_WORKSPACE/skills/octance/scripts/octance.py"` while the shell working directory is the target project root.
 

@@ -116,6 +116,81 @@ class OctancePhaseOneTests(unittest.TestCase):
         db.rollback()
         db.close()
 
+    def test_indexed_file_symbol_search_and_multiword_fallback(self):
+        root, _ = self.init()
+        code, ev = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "unrelated note",
+                               "--file", "src/parser.py", "--symbol", "parse_widget")
+        self.assertEqual(code, 0, ev)
+        code, result = self.invoke(root, "evidence", "search", "--query", "parser")
+        self.assertEqual(code, 0, result)
+        self.assertEqual([row["evidence_id"] for row in result["data"]], [ev["data"]["evidence_id"]])
+        code, result = self.invoke(root, "evidence", "search", "--query", "parse widget")
+        self.assertEqual(code, 0, result)
+        self.assertEqual(len(result["data"]), 1)
+        project = Project(root)
+        project.ledger.fts5 = False
+        self.assertEqual(len(project.search_evidence("parser widget")), 1)
+        self.assertEqual(project.search_evidence("missing widget"), [])
+
+    def test_secret_patterns_and_line_range_validation(self):
+        root, _ = self.init()
+        code, result = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description",
+                                   "Authorization: Bearer supersecret123 and https://alice:password@example.test/a",
+                                   "--payload", '{"my_secret_value":"hidden","note":"token=abc123"}')
+        self.assertEqual(code, 0, result)
+        database = (root / ".octance/octance.db").read_bytes()
+        for secret in (b"supersecret123", b"alice:password", b"hidden", b"token=abc123"):
+            self.assertNotIn(secret, database)
+        bad, response = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "range",
+                                    "--line-range", "token=exposed")
+        self.assertEqual(bad, 2, response)
+        self.assertEqual(response["error"], "invalid_input")
+
+    def test_doctor_runs_before_initialization_and_claim_links_transitions_are_replayable(self):
+        root = self.base / "doctor-root"
+        root.mkdir()
+        code, result = self.invoke(root, "doctor")
+        self.assertEqual(code, 0, result)
+        self.assertIsNone(result["data"]["schema_version"])
+        self.assertFalse((root / ".octance" / "octance.db").exists())
+        root, _ = self.init("claim-root")
+        code, self_evidence = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "self link", "--related", "EV-0001")
+        self.assertEqual(code, 2, self_evidence)
+        _, evidence = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "supports parser", "--file", "src/parser.py", "--symbol", "parse_widget")
+        _, first = self.invoke(root, "claim", "add", "--kind", "hypothesis", "--text", "parser hypothesis", "--evidence", evidence["data"]["evidence_id"])
+        _, second = self.invoke(root, "claim", "add", "--kind", "decision", "--text", "separate conclusion")
+        code, link = self.invoke(root, "claim", "link", first["data"]["claim_id"], second["data"]["claim_id"], "--relation", "supports")
+        self.assertEqual(code, 0, link)
+        code, self_link = self.invoke(root, "claim", "link", first["data"]["claim_id"], first["data"]["claim_id"], "--relation", "supports")
+        self.assertEqual(code, 2, self_link)
+        code, updated = self.invoke(root, "claim", "status", first["data"]["claim_id"], "--status", "corroborated")
+        self.assertEqual(code, 0, updated)
+        code, found = self.invoke(root, "claim", "get", first["data"]["claim_id"])
+        self.assertEqual(code, 0, found)
+        self.assertEqual(found["data"]["status"], "corroborated")
+        self.assertEqual(found["data"]["links"][0]["direction"], "outgoing")
+        code, incoming = self.invoke(root, "claim", "get", second["data"]["claim_id"])
+        self.assertEqual(code, 0, incoming)
+        self.assertEqual(incoming["data"]["links"][0]["direction"], "incoming")
+        code, brief = self.invoke(root, "brief", "--task", "nothing matches", "--files", "src/parser.py", "--budget-tokens", "1000")
+        self.assertEqual(code, 0, brief)
+        self.assertIn(first["data"]["claim_id"], [item["claim_id"] for item in brief["data"]["claims"]])
+        code, result = self.invoke(root, "rebuild", "--check")
+        self.assertEqual(code, 0, result)
+        self.assertTrue(result["data"]["matches"], result)
+        code, result = self.invoke(root, "claim", "search", "--status", "asserted")
+        self.assertEqual(code, 0, result)
+        self.assertNotIn(first["data"]["claim_id"], [item["claim_id"] for item in result["data"]])
+
+    def test_brief_uses_whole_terms_not_substrings(self):
+        root, _ = self.init()
+        _, claim = self.invoke(root, "claim", "add", "--kind", "hypothesis", "--text", "hypothesis without matching term")
+        _, brief = self.invoke(root, "brief", "--task", "the")
+        self.assertNotIn(claim["data"]["claim_id"], [item["claim_id"] for item in brief["data"]["claims"]])
+        project = Project(root)
+        project.ledger.fts5 = False
+        self.assertEqual(project.search_claims("the"), [])
+
     def test_agents_permissions_low_trust_quarantine_and_verified_forbidden(self):
         root, _ = self.init()
         code, agent = self.invoke(root, "agent", "register", "--name", "quiet-explorer", "--role", "explorer", "--trust-tier", "low")

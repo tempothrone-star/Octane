@@ -67,8 +67,8 @@ After code changes, Octance Phase 1 has no footprint-based staleness or revalida
 - `status` / `doctor` — summarize ledger state or inspect local setup.
 - `agent register --name NAME --role explorer|investigator|tester|documenter` — register under the local owner admin.
 - `evidence add|get|search|link` — append or retrieve observations; evidence records are immutable.
-- `claim add|get|search|link` — record a separate assertion, hypothesis, intent, or other claim kind.
-- `brief --task TEXT [--files a.py] [--symbols f] --budget-tokens N` — retrieve bounded keyword-relevant claims.
+- `claim add|get|search|link|status` — record a claim, inspect its links, or append an immutable status transition (for example, `claim status CL-0001 --status needs_review`). Transitions never overwrite the original claim event.
+- `brief --task TEXT [--files a.py] [--symbols f] --budget-tokens N` — retrieve bounded claims using whole-word task matches plus exact supporting-evidence file/symbol matches.
 - `languages` — inventory common source extensions with file-count and per-file size budgets; does not parse files.
 - `graph` — bounded best-effort project-local dependency edges; full parser only for Python, heuristic import patterns elsewhere.
 - `locate --trace-file failure.log [--query TEXT]` — rank file suspects from supported stack frames, query terms, and recent Git changes; heuristic only.

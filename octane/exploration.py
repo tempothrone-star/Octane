@@ -53,7 +53,7 @@ class PythonAdapter:
 
         module_nodes: dict[Path, str] = {}
         function_nodes: list[tuple[str, str, str, int, str]] = []
-        imports: list[tuple[Path, str, int]] = []
+        imports: list[tuple[Path, str, int, int]] = []
         calls: list[tuple[str, str, int]] = []
         edge_count = 0
         for path in files:
@@ -63,8 +63,10 @@ class PythonAdapter:
             try:
                 tree = ast.parse(content[path], filename=rel)
             except (SyntaxError, UnicodeDecodeError) as exc:
-                intelligence.submit_evidence(project_id, "parse_error", {"error": str(exc)}, "Python source could not be parsed", agent_id=scanner["id"], revision=revision, source_path=rel, verification_status="observed")
+                if rel in changed:
+                    intelligence.submit_evidence(project_id, "parse_error", {"error": str(exc)}, "Python source could not be parsed", agent_id=scanner["id"], revision=revision, source_path=rel, verification_status="observed")
                 continue
+            parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     parent = _qualified_name(tree, node)
@@ -78,15 +80,24 @@ class PythonAdapter:
                     function_nodes.append((parent, rel, symbol_id, node.lineno, kind))
                     if kind == "function":
                         for sub in ast.walk(node):
-                            if isinstance(sub, ast.Call):
+                            if not isinstance(sub, ast.Call):
+                                continue
+                            ancestor = parents.get(sub)
+                            while ancestor is not None and not isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                                ancestor = parents.get(ancestor)
+                            if ancestor is node:
                                 name = _call_name(sub.func)
                                 if name:
                                     calls.append((f"{rel}:{parent}", name, sub.lineno))
                 elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                    names = [alias.name for alias in node.names] if isinstance(node, ast.Import) else [node.module or ""]
-                    imports.extend((path, name, node.lineno) for name in names)
-            intelligence.submit_evidence(project_id, "file_scan", {"path": rel, "sha256": hashes[rel], "symbols": sum(1 for f in function_nodes if f[1] == rel)},
-                                         "Python file hashed and inspected using AST", agent_id=scanner["id"], revision=revision, source_path=rel, verification_status="observed")
+                    if isinstance(node, ast.Import):
+                        imports.extend((path, alias.name, node.lineno, 0) for alias in node.names)
+                    else:
+                        names = [node.module or ""] + ([alias.name for alias in node.names] if not node.module else [])
+                        imports.extend((path, name, node.lineno, node.level) for name in names)
+            if rel in changed:
+                intelligence.submit_evidence(project_id, "file_scan", {"path": rel, "sha256": hashes[rel], "symbols": sum(1 for f in function_nodes if f[1] == rel)},
+                                             "Python file hashed and inspected using AST", agent_id=scanner["id"], revision=revision, source_path=rel, verification_status="observed")
 
         by_module: dict[str, Path] = {}
         for path in files:
@@ -95,7 +106,14 @@ class PythonAdapter:
             if module.endswith(".__init__"):
                 module = module[:-9]
             by_module[module] = path
-        for source, imported, line in imports:
+        for source, imported, line, level in imports:
+            if level:
+                package = ".".join(source.relative_to(root).with_suffix("").parts[:-1])
+                if source.name == "__init__.py":
+                    package = ".".join(source.relative_to(root).parent.parts)
+                parts = package.split(".") if package else []
+                base = parts[:max(0, len(parts) - level + 1)]
+                imported = ".".join(base + ([imported] if imported else []))
             target = by_module.get(imported)
             if target:
                 intelligence.add_relationship(project_id, module_nodes[source], module_nodes[target], "imports", revision,

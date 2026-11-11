@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 import sqlite3
+
+if sys.version_info < (3, 11):
+    raise unittest.SkipTest("the native PIL plugin suite requires Python 3.11+")
 
 from octane import ExplorationProfile, ExplorationScheduler, ProjectIntelligence, PythonAdapter, Tentacle, WorkspaceManager
 from octane.db import _SCHEMA
@@ -191,6 +195,42 @@ class PILTests(unittest.TestCase):
         old_graph = self.database.query_graph(self.project["id"], include_stale=True)
         self.assertTrue(any(edge["kind"] == "calls" and edge["stale"] for edge in old_graph["edges"]))
         self.assertTrue(any(node["name"] == "main" and node["stale"] for node in old_graph["nodes"]))
+
+    def test_memory_hypothesis_text_and_evidence_payload_redact_credentials(self):
+        evidence = self.database.submit_evidence(self.project["id"], "runtime", {
+            "message": "Authorization: Bearer abc.def-token https://alice:secret@example.test/ password=hunter2"},
+            "safe description")
+        self.assertNotIn("abc.def-token", evidence["payload_json"])
+        self.assertNotIn("alice:secret", evidence["payload_json"])
+        memory = self.database.add_memory(self.project["id"], "note", "Bearer long-lived-token https://bob:pass@example.test")
+        hypothesis = self.database.create_hypothesis(self.project["id"], "token=do-not-save and https://user:pw@example.test")
+        for value in (memory["content"], hypothesis["statement"]):
+            self.assertNotIn("long-lived-token", value)
+            self.assertNotIn("do-not-save", value)
+            self.assertNotIn("bob:pass", value)
+            self.assertNotIn("user:pw", value)
+        with self.assertRaises(ValueError):
+            self.database.submit_evidence(self.project["id"], "runtime", {"client__secret_key": "forbidden"}, "key")
+
+    def test_python_adapter_relative_imports_nested_calls_and_repeat_scan_dedup(self):
+        package = self.root / "pkg"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "util.py").write_text("def leaf():\n    return 1\n", encoding="utf-8")
+        (package / "client.py").write_text(
+            "from . import util\n\ndef outer():\n    def inner():\n        return util.leaf()\n    return inner()\n", encoding="utf-8")
+        adapter = PythonAdapter()
+        first = adapter.scan(self.database, self.project["id"], self.root)
+        count_before = len(self.database.search_evidence(self.project["id"], evidence_type="file_scan"))
+        adapter.scan(self.database, self.project["id"], self.root)
+        self.assertEqual(len(self.database.search_evidence(self.project["id"], evidence_type="file_scan")), count_before)
+        graph = self.database.query_graph(self.project["id"])
+        nodes = {node["id"]: node["node_key"] for node in graph["nodes"]}
+        self.assertTrue(any(edge["kind"] == "imports" and nodes[edge["target_id"]] == "file:pkg/util.py" for edge in graph["edges"]))
+        calls = [(nodes[edge["source_id"]], nodes[edge["target_id"]]) for edge in graph["edges"] if edge["kind"] == "calls"]
+        self.assertIn(("symbol:pkg/client.py:outer.inner", "symbol:pkg/util.py:leaf"), calls)
+        self.assertNotIn(("symbol:pkg/client.py:outer", "symbol:pkg/util.py:leaf"), calls)
+        self.assertEqual(first["files_scanned"], 3)
 
     def test_atomic_graph_update_records_confidence_and_provenance(self):
         agent = self.database.register_agent(self.project["id"], "graph-writer", "explorer", permissions=["update_graph"])

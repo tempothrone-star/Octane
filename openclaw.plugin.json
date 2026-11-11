@@ -33,7 +33,7 @@
     "octane_schedule": { "optional": true },
     "octane_workspace": { "optional": true }
   },
-  "skills": ["./openclaw/skills"],
+  "skills": ["./octance"],
   "activation": { "onStartup": true },
   "configSchema": {
     "type": "object",

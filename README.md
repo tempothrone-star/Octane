@@ -4,14 +4,27 @@ Octance is a portable OpenClaw skill backed by a deterministic, Python-standard-
 
 ## Install the skill
 
-Copy the complete `octance/` directory into an OpenClaw workspace skills directory so its `SKILL.md`, references, and helper script stay together:
+For a Git-based install, the repository root now contains an OpenClaw-discoverable `SKILL.md`:
+
+```sh
+openclaw skills install git:https://github.com/tempothrone-star/Octane.git
+```
+
+For a manual workspace install, copy the complete `octance/` directory so its `SKILL.md`, references, and helper script stay together:
 
 ```sh
 mkdir -p "$OPENCLAW_WORKSPACE/skills"
 cp -R ./octance "$OPENCLAW_WORKSPACE/skills/"
 ```
 
-Start a new OpenClaw session or refresh the skill catalog, then check that `octance` appears in `openclaw skills list`. This repository does not publish or install the skill to ClawHub automatically.
+Start a new OpenClaw session or refresh the skill catalog, then check that `octance` appears in `openclaw skills list`. This repository does not publish the skill to ClawHub automatically. For users who need the optional native plugin tools as well, install the declared npm dependency and link the repository package:
+
+```sh
+npm install --omit=peer
+openclaw plugins install --link . --force
+```
+
+The plugin manifest bundles this same `octance/` skill. The native plugin tools are optional, use a separate PIL-backed store, and require Node.js and Python 3.11+; the portable skill CLI remains standard-library-only and supports Python 3.9+.
 
 The skill declares `python3` as its only binary requirement. Keep the target project as the CLI working directory. From this repository, use `python3 scripts/octance.py`; from a separately installed skill, invoke `python3 "$OPENCLAW_WORKSPACE/skills/octance/scripts/octance.py"` while the shell working directory is the target project root.
 
@@ -38,7 +51,29 @@ python3 scripts/octance.py claim add \
 python3 scripts/octance.py brief --task "trace parser validation" --budget-tokens 1200
 ```
 
-Output is JSON by default. Use `--human` for readable output and `--format compact` for compact JSON. Agent identity comes from `OCTANCE_AGENT` unless overridden by `--agent`; the default local identity is `owner`. Token budgeting estimates tokens as characters divided by four. The initial CLI includes project init, agents, immutable evidence, claims, `brief`, status/doctor, `verify-log`, and `rebuild --check`. Commands for checks, exploration, localization, leases, and investigation handoffs have **not** passed their build gates and are not available yet.
+Output is JSON by default. Use `--human` for readable output and `--format compact` for compact JSON. Agent identity comes from `OCTANCE_AGENT` unless overridden by `--agent`; the default local identity is `owner`. Token budgeting estimates tokens as characters divided by four. The CLI also provides `languages` for bounded source-extension inventory and `locate --trace-file failure.log` for heuristic file-level ranking from supplied traces and recent Git changes. These are static triage aids, not language parsers or root-cause findings. A predeclared replayable check runner, budgeted exploration, and benchmark-quality localization have not passed their gates; no continuity features are being added.
+
+## Multilingual triage prototype
+
+Inventory common source files without parsing or running them:
+
+```sh
+python3 scripts/octance.py languages
+```
+
+After you run an approved test using the host's authorized tools, save its plain-text failure trace inside the project, then ask Octance to rank file-level suspects:
+
+```sh
+python3 scripts/octance.py locate --trace-file .octance/failure.log --query "parse request"
+```
+
+This currently recognizes common frame formats for Python, JavaScript/TypeScript, Go, Java, Rust, and C/C++. The inventory supports a broader extension list, applies count/size limits, skips common vendor/generated directories, and reports unsupported extensions. `graph` extracts bounded internal file dependencies from Python imports and common import/include forms in JavaScript/TypeScript, Go, Java, Rust, C/C++, C#, PHP, Ruby, Kotlin, and Scala:
+
+```sh
+python3 scripts/octance.py graph
+```
+
+This is not a full parser: only Python uses the standard-library AST; other languages use conservative textual patterns, so imports may be missed or misresolved. The graph is a best-effort dependency map, not a complete call graph or proof of runtime reachability. These commands do not modify source or execute project code. `locate` is heuristic file ranking, not a root-cause result; see [`docs/implementation-and-limitations.md`](docs/implementation-and-limitations.md) for the synthetic benchmark and its limits.
 
 ## Data and safety
 

@@ -9,6 +9,7 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_REQUEST_BYTES = 1_000_000;
 const MAX_RESPONSE_BYTES = 8_000_000;
+const DEFAULT_BRIDGE_TIMEOUT_MS = 120_000;
 const optional = (schema) => Type.Optional(schema);
 const action = (...values) => Type.Union(values.map((value) => Type.Literal(value)));
 const payload = Type.Record(Type.String(), Type.Any());
@@ -55,6 +56,9 @@ function callBridge(config, operation, params) {
   const priorPath = process.env.PYTHONPATH;
   const pythonPath = [PLUGIN_ROOT, priorPath].filter(Boolean).join(delimiter);
 
+  const bridgeTimeoutMs = operation.startsWith("workspace.") && Number.isInteger(params?.timeoutSeconds)
+    ? Math.min(300, Math.max(1, params.timeoutSeconds)) * 1000 + 10_000
+    : DEFAULT_BRIDGE_TIMEOUT_MS;
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(resolved.python, args, {
       cwd: PLUGIN_ROOT,
@@ -68,6 +72,14 @@ function callBridge(config, operation, params) {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let overflow = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGTERM");
+      const forceKill = setTimeout(() => child.kill("SIGKILL"), 1000);
+      forceKill.unref?.();
+    }, bridgeTimeoutMs);
+    timeout.unref?.();
     child.stdout.on("data", (chunk) => {
       stdoutBytes += chunk.length;
       if (stdoutBytes > MAX_RESPONSE_BYTES) {
@@ -82,8 +94,13 @@ function callBridge(config, operation, params) {
         stderrBytes += accepted.length;
       }
     });
-    child.once("error", (error) => rejectPromise(new Error(`Could not start Octane's Python bridge: ${error.message}`)));
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      rejectPromise(new Error(`Could not start Octane's Python bridge: ${error.message}`));
+    });
     child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return rejectPromise(new Error(`Octane bridge timed out after ${Math.ceil(bridgeTimeoutMs / 1000)} seconds.`));
       if (overflow) return rejectPromise(new Error("Octane response exceeded the 8 MB limit."));
       const out = Buffer.concat(stdout).toString("utf8");
       if (code !== 0 && !out.trim()) {

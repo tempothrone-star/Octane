@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 import subprocess
 import uuid
@@ -29,6 +30,18 @@ def _sanitize_repository_url(value: str) -> str:
         return value.split("@", 1)[1]
     return value
 
+
+
+
+def _scrub_sensitive_text(value: str) -> str:
+    """Redact common bearer/basic-auth and assignment secrets before persistence."""
+    import re
+    value = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "[REDACTED PRIVATE KEY]", value, flags=re.S)
+    value = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", value)
+    value = re.sub(r"(?i)(://)[^/@:\s]+:[^/@\s]+@", r"\1[REDACTED]@", value)
+    value = re.sub(r"(?i)((?:[A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_-]*)\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", value)
+    value = re.sub(r"(?i)\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b", "[REDACTED TOKEN]", value)
+    return value
 
 def _git_remote_url(root: Path) -> str | None:
     try:
@@ -62,11 +75,21 @@ def _normalize_languages(languages) -> list[str]:
     return sorted({language.strip() for language in values})
 
 
+def _scrub_sensitive_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _scrub_sensitive_text(value)
+    if isinstance(value, dict):
+        return {key: _scrub_sensitive_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_scrub_sensitive_value(item) for item in value]
+    return value
+
+
 def _reject_secret_keys(value: Any, parent: str = "") -> None:
     sensitive = ("password", "secret", "token", "api_key", "apikey", "credential", "private_key")
     if isinstance(value, dict):
         for key, nested in value.items():
-            normalized = str(key).casefold().replace("-", "_")
+            normalized = re.sub(r"[^a-z0-9]+", "_", str(key).casefold()).strip("_")
             if any(term in normalized for term in sensitive):
                 raise ValueError(f"project configuration key {parent + str(key)!r} resembles a secret; secrets are not stored")
             _reject_secret_keys(nested, parent + str(key) + ".")
@@ -402,6 +425,8 @@ class ProjectIntelligence:
         if not isinstance(payload, dict):
             raise TypeError("evidence payload must be a dictionary")
         _reject_secret_keys(payload)
+        description = _scrub_sensitive_text(description)
+        payload = _scrub_sensitive_value(payload)
         source_path = _project_relative_path(source_path)
         if source_line is not None and source_line < 1:
             raise ValueError("source_line must be a positive one-based line number")
@@ -508,6 +533,7 @@ class ProjectIntelligence:
 
     def add_memory(self, project_id: str, category: str, content: str, agent_id: str | None = None,
                    revision: str | None = None, supporting_evidence: tuple[str, ...] | list[str] = ()) -> dict[str, Any]:
+        content = _scrub_sensitive_text(content)
         memory_id, now = _id("MEM"), _now()
         with self._transaction() as db:
             row = db.execute("SELECT revision FROM projects WHERE id=?", (project_id,)).fetchone()
@@ -931,6 +957,7 @@ class ProjectIntelligence:
             raise ValueError("confidence must be between 0 and 1")
         if status not in {"proposed", "under_investigation", "supported", "contradicted", "inconclusive", "resolved"}:
             raise ValueError("invalid hypothesis status")
+        statement = _scrub_sensitive_text(statement)
         hypothesis_id, now = _id("HYP"), _now()
         with self._transaction() as db:
             project = db.execute("SELECT revision FROM projects WHERE id=?", (project_id,)).fetchone()

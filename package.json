@@ -1,15 +1,21 @@
 {
-  "name": "octane-openclaw-legacy",
+  "name": "octane-openclaw",
   "version": "0.1.0",
-  "private": true,
-  "description": "Archived legacy OpenClaw plugin; not the current Octance skill deliverable",
+  "private": false,
+  "description": "OpenClaw extension and portable Octance skill package",
   "type": "module",
   "files": [
+    "SKILL.md",
     "openclaw/index.js",
-    "openclaw/skills/**",
     "openclaw/README.md",
     "openclaw.plugin.json",
+    "octance/SKILL.md",
+    "octance/references/**",
+    "octance/scripts/octance.py",
+    "octance/scripts/octance/*.py",
+    "octance/scripts/octance/migrations/*.sql",
     "octane/*.py",
+    "scripts/octance.py",
     "README.md",
     "docs/architecture.md",
     "docs/openclaw.md",
@@ -25,11 +31,20 @@
     "node": "^24.22.1 || >=26.12.1"
   },
   "openclaw": {
-    "extensions": ["./openclaw/index.js"],
-    "runtimeExtensions": ["./openclaw/index.js"],
+    "extensions": [
+      "./openclaw/index.js"
+    ],
+    "runtimeExtensions": [
+      "./openclaw/index.js"
+    ],
     "compat": {
       "pluginApi": ">=2026.5.17",
       "minGatewayVersion": "2026.5.17"
+    }
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
     }
   }
 }

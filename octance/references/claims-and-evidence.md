@@ -2,7 +2,7 @@
 
 Octance stores observations as immutable evidence and interpretations as separate claims. Evidence uses one of the CLI's listed types, has a content hash, agent, UTC timestamp, project revision, method, verification status, and optional relative file/symbol/line metadata. Phase 1 always records evidence as `unverified`; merely naming a record `test_result` or `runtime_trace` does not prove it ran.
 
-Supported claim kinds are `observation`, `inference`, `hypothesis`, `intent`, `decision`, `requirement`, `limitation`, and `open_question`. Claims cite evidence IDs where relevant, may cite contradicting evidence or dependent claims, have no numeric confidence score, and cannot be edited in Phase 1. Add a new claim and an explicit link to correct or qualify an earlier one.
+Supported claim kinds are `observation`, `inference`, `hypothesis`, `intent`, `decision`, `requirement`, `limitation`, and `open_question`. Claims cite evidence IDs where relevant, may cite contradicting evidence or dependent claims, and have no numeric confidence score. Claim text is immutable, while status changes are recorded through append-only events; for example, `claim status CL-0001 --status needs_review`. Add a new claim and an explicit link to correct or qualify earlier claim content.
 
 Example:
 

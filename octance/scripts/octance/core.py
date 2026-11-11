@@ -25,15 +25,15 @@ EVIDENCE_TYPES = {
 CLAIM_KINDS = {"observation", "inference", "hypothesis", "intent", "decision", "requirement", "limitation", "open_question"}
 CLAIM_STATUSES = {"asserted", "corroborated", "contradicted", "stale", "needs_review", "retracted", "quarantined"}
 ROLE_PERMISSIONS = {
-    "explorer": {"evidence.add", "evidence.read", "evidence.search", "claim.add", "claim.read", "claim.search", "brief", "status"},
-    "investigator": {"evidence.add", "evidence.read", "evidence.search", "evidence.link", "claim.add", "claim.read", "claim.search", "claim.link", "brief", "status"},
-    "tester": {"evidence.add", "evidence.read", "evidence.search", "claim.read", "claim.search", "brief", "status"},
-    "documenter": {"evidence.add", "evidence.read", "evidence.search", "claim.add", "claim.read", "claim.search", "brief", "status"},
+    "explorer": {"evidence.add", "evidence.read", "evidence.search", "claim.add", "claim.read", "claim.search", "claim.transition", "brief", "status"},
+    "investigator": {"evidence.add", "evidence.read", "evidence.search", "evidence.link", "claim.add", "claim.read", "claim.search", "claim.link", "claim.transition", "brief", "status"},
+    "tester": {"evidence.add", "evidence.read", "evidence.search", "claim.read", "claim.search", "claim.transition", "brief", "status"},
+    "documenter": {"evidence.add", "evidence.read", "evidence.search", "claim.add", "claim.read", "claim.search", "claim.transition", "brief", "status"},
     "admin": {"*"},
 }
 _SECRET_KEY = re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|credential|private[_-]?key)")
-_SECRET_ASSIGNMENT = re.compile(r"(?i)(\b(?:password|passwd|secret|token|api[_-]?key|credential)\b\s*[:=]\s*)([^\s,;]+)")
-_SECRET_TOKEN = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b")
+_SECRET_ASSIGNMENT = re.compile(r"(?i)((?:[A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|credential)[A-Za-z0-9_-]*)\s*[:=]\s*)([^\s,;]+)")
+_SECRET_TOKEN = re.compile(r"(?i)(?:\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b|\bBearer\s+[A-Za-z0-9._~+/-]+=*|(?<=://)[^/@:\s]+:[^/@\s]+@)")
 _PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
 _EXCLUDED_DIRS = {".git", ".octance", "__pycache__", ".venv", "venv", "node_modules", "dist", "build", ".tox"}
 
@@ -228,9 +228,21 @@ class Ledger:
                 except Exception:
                     conn.rollback()
                     raise
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("CREATE TABLE IF NOT EXISTS claim_status_events (id INTEGER PRIMARY KEY AUTOINCREMENT, claim_id TEXT NOT NULL REFERENCES claims(claim_id), previous_status TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('asserted','corroborated','contradicted','stale','needs_review','retracted','quarantined')), agent_id TEXT NOT NULL REFERENCES agents(agent_id), created_at TEXT NOT NULL)")
+            conn.execute("CREATE INDEX IF NOT EXISTS claim_status_events_claim ON claim_status_events(claim_id,id)")
+            conn.execute("CREATE TRIGGER IF NOT EXISTS claim_status_events_no_update BEFORE UPDATE ON claim_status_events BEGIN SELECT RAISE(ABORT, 'claim status events are append-only'); END")
+            conn.execute("CREATE TRIGGER IF NOT EXISTS claim_status_events_no_delete BEFORE DELETE ON claim_status_events BEGIN SELECT RAISE(ABORT, 'claim status events are append-only'); END")
+            conn.execute("CREATE TABLE IF NOT EXISTS octance_internal_schema(version INTEGER NOT NULL)")
+            fts_version = conn.execute("SELECT version FROM octance_internal_schema LIMIT 1").fetchone()
+            if not fts_version or int(fts_version[0]) < 2:
+                conn.execute("DROP TABLE IF EXISTS evidence_fts")
+                conn.execute("DELETE FROM octance_internal_schema")
+                conn.execute("INSERT INTO octance_internal_schema(version) VALUES(2)")
+            conn.commit()
             try:
                 conn.execute("BEGIN IMMEDIATE")
-                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(evidence_id UNINDEXED,project_id UNINDEXED,type UNINDEXED,description,payload,file UNINDEXED,symbol UNINDEXED)")
+                conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS evidence_fts USING fts5(evidence_id UNINDEXED,project_id UNINDEXED,type UNINDEXED,description,payload,file,symbol)")
                 conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS claims_fts USING fts5(claim_id UNINDEXED,project_id UNINDEXED,kind UNINDEXED,status UNINDEXED,text)")
                 conn.execute("INSERT INTO evidence_fts(evidence_id,project_id,type,description,payload,file,symbol) SELECT e.evidence_id,e.project_id,e.type,e.description,e.payload_json,COALESCE(e.file,''),COALESCE(e.symbol,'') FROM evidence e WHERE NOT EXISTS (SELECT 1 FROM evidence_fts f WHERE f.evidence_id=e.evidence_id)")
                 conn.execute("INSERT INTO claims_fts(claim_id,project_id,kind,status,text) SELECT c.claim_id,c.project_id,c.kind,c.status,c.text FROM claims c WHERE NOT EXISTS (SELECT 1 FROM claims_fts f WHERE f.claim_id=c.claim_id)")
@@ -356,8 +368,10 @@ class Ledger:
     @staticmethod
     def materialized(conn: sqlite3.Connection) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
-        for table in ("projects", "agents", "evidence", "evidence_links", "claims", "claim_links"):
-            rows = [dict(row) for row in conn.execute("SELECT * FROM " + table)]
+        for table in ("projects", "agents", "evidence", "evidence_links", "claims", "claim_links", "claim_status_events"):
+            rows = [dict(row) for row in conn.execute("SELECT * FROM " + table + (" ORDER BY id" if table == "claim_status_events" else ""))]
+            if table == "claim_status_events":
+                for row in rows: row.pop("id", None)
             for row in rows:
                 for key in list(row):
                     if key.endswith("_json"):
@@ -370,7 +384,7 @@ class Ledger:
         integrity = self.verify_log(project_id)
         if not integrity["valid"]:
             return {"matches": False, "integrity": integrity, "mismatches": ["event log integrity"]}
-        expected: Dict[str, Any] = {"projects": [], "agents": [], "evidence": [], "evidence_links": [], "claims": [], "claim_links": [], "counters": {}}
+        expected: Dict[str, Any] = {"projects": [], "agents": [], "evidence": [], "evidence_links": [], "claims": [], "claim_links": [], "claim_status_events": [], "counters": {}}
         conn = self.connect()
         try:
             rows = conn.execute("SELECT * FROM event_log ORDER BY seq").fetchall()
@@ -398,6 +412,8 @@ class Ledger:
                     expected["counters"]["CL"] = expected["counters"].get("CL", 0) + 1
                 elif op == "claim.link":
                     item = dict(record); item.pop("project_id", None); expected["claim_links"].append(item)
+                elif op == "claim.status":
+                    expected["claim_status_events"].append({k: record[k] for k in ("claim_id", "previous_status", "status", "agent_id", "created_at")})
                 else:
                     return {"matches": False, "mismatches": ["unknown reducer operation: " + op]}
             actual = self.materialized(conn)
@@ -516,15 +532,23 @@ class Project:
         return revision_for(self.root)
 
     def refresh_anchor(self) -> None:
+        # Hold SQLite's write reservation while reading the committed head and replacing
+        # the external anchor, so concurrent writers cannot overwrite a newer anchor
+        # with a stale snapshot.
         conn = self.ledger.connect()
         try:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT seq,hash FROM event_log ORDER BY seq DESC LIMIT 1").fetchone()
+            metadata = dict(self.metadata)
+            metadata["log_anchor"] = {"seq": int(row["seq"]), "hash": row["hash"]}
+            _atomic_json(self.state / "project.json", metadata)
+            conn.commit()
+            self.metadata = metadata
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
-        metadata = dict(self.metadata)
-        metadata["log_anchor"] = {"seq": int(row["seq"]), "hash": row["hash"]}
-        _atomic_json(self.state / "project.json", metadata)
-        self.metadata = metadata
 
     def _require(self, agent: Dict[str, Any], permission: str) -> None:
         conn = self.ledger.connect()
@@ -579,11 +603,17 @@ class Project:
         file = _redact(file, redactions) if file else None
         symbol = _redact(symbol, redactions) if symbol else None
         method = _redact(method, redactions)
+        if line_range is not None and (not isinstance(line_range, str) or not re.fullmatch(r"[1-9][0-9]*(?:-[1-9][0-9]*)?", line_range)):
+            raise OctanceError("line range must be a positive line number or start-end range", 2, "invalid_input")
+        if line_range and "-" in line_range and int(line_range.split("-", 1)[0]) > int(line_range.split("-", 1)[1]):
+            raise OctanceError("line range start must not exceed its end", 2, "invalid_input")
         if file:
             relative = Path(file)
             if relative.is_absolute() or ".." in relative.parts or not _within((self.root / relative).resolve(), self.root):
                 raise OctanceError("evidence file must be a project-relative path inside this root", 2, "invalid_input")
         related = sorted(set(related or []))
+        if any(not isinstance(item, str) or not item for item in related):
+            raise OctanceError("related evidence IDs must be non-empty strings", 2, "invalid_input")
         request = {"type": evidence_type, "description": description, "payload": payload, "file": file,
                    "symbol": symbol, "line_range": line_range, "method": method, "related": related, "revision": self.revision()}
         conn = self.ledger.connect()
@@ -603,6 +633,8 @@ class Project:
                 if self.ledger.fts5:
                     c.execute("INSERT INTO evidence_fts VALUES(?,?,?,?,?,?,?)", (r["evidence_id"], self.project_id, evidence_type, description, r["payload_json"], file or "", symbol or ""))
                 for target in related:
+                    if target == r["evidence_id"]:
+                        raise OctanceError("self-referential evidence links are not allowed", 2, "invalid_input")
                     found = c.execute("SELECT project_id FROM evidence WHERE evidence_id=?", (target,)).fetchone()
                     if not found or found[0] != self.project_id: raise OctanceError("related evidence must belong to this project", 2, "invalid_input")
                     c.execute("INSERT INTO evidence_links VALUES(?,?,?,?,?)", (r["evidence_id"], target, "related_to", actor_id, r["created_at"]))
@@ -637,11 +669,13 @@ class Project:
             evidence_types = {row[0] for eid in support for row in conn.execute("SELECT type FROM evidence WHERE evidence_id=?", (eid,))}
             basis = "static_analysis" if "static_analysis" in evidence_types else ("agent_inference" if support else "unsupported")
             status = "quarantined" if actor["trust_tier"] == "low" else "asserted"
-            request = {"kind": kind, "text": text, "supporting": support, "contradicting": contradiction, "depends": dependencies}
             conn.execute("BEGIN IMMEDIATE")
+            revision = self.revision()
+            request = {"kind": kind, "text": text, "supporting": support, "contradicting": contradiction,
+                       "depends": dependencies, "revision": revision}
             def build(c: sqlite3.Connection, when: str) -> Dict[str, Any]:
                 return {"claim_id": Ledger.next_id(c, "CL"), "project_id": self.project_id, "kind": kind, "text": text,
-                        "agent_id": actor_id, "revision": self.revision(), "supporting_evidence_json": canonical(support),
+                        "agent_id": actor_id, "revision": revision, "supporting_evidence_json": canonical(support),
                         "contradicting_evidence_json": canonical(contradiction), "depends_on_claims_json": canonical(dependencies),
                         "footprint_json": "{}", "evidence_basis": basis, "status": status, "version": 1,
                         "created_at": when, "redactions": redactions[0]}
@@ -666,6 +700,37 @@ class Project:
             if key in result: result[key[:-5]] = json.loads(result.pop(key))
         return result
 
+    def transition_claim(self, actor_id: str, claim_id: str, status: str, explicit_key: Optional[str] = None) -> Dict[str, Any]:
+        if status not in CLAIM_STATUSES:
+            raise OctanceError("invalid claim status", 2, "invalid_input")
+        conn = self.ledger.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            actor = Ledger.agent(conn, actor_id, self.project_id)
+            Ledger.require(conn, actor, "claim.transition")
+            row = conn.execute("SELECT * FROM claims WHERE claim_id=? AND project_id=?", (claim_id, self.project_id)).fetchone()
+            if not row:
+                raise OctanceError("unknown claim", 2, "not_found")
+            previous = conn.execute("SELECT status FROM claim_status_events WHERE claim_id=? ORDER BY id DESC LIMIT 1", (claim_id,)).fetchone()
+            previous_status = previous[0] if previous else row["status"]
+            request = {"claim_id": claim_id, "status": status}
+            def build(_conn: sqlite3.Connection, when: str) -> Dict[str, Any]:
+                return {"claim_id": claim_id, "previous_status": previous_status, "status": status,
+                        "agent_id": actor_id, "created_at": when}
+            def apply(c: sqlite3.Connection, record: Dict[str, Any]) -> None:
+                c.execute("INSERT INTO claim_status_events(claim_id,previous_status,status,agent_id,created_at) VALUES(?,?,?,?,?)",
+                          tuple(record[k] for k in ("claim_id", "previous_status", "status", "agent_id", "created_at")))
+            result = self.ledger.event(conn, self.project_id, actor_id, "claim.status", request, build, apply, explicit_key)
+            conn.commit()
+            self.refresh_anchor()
+            return result
+        except sqlite3.IntegrityError as error:
+            conn.rollback(); raise OctanceError("claim transition rejected: " + str(error), 2, "invalid_input")
+        except Exception:
+            conn.rollback(); raise
+        finally:
+            conn.close()
+
     def link_evidence(self, actor_id: str, evidence_id: str, related_id: str, relation: str, explicit_key=None) -> Dict[str, Any]:
         if relation not in {"supports", "contradicts", "context", "supersedes", "verifies", "related_to"}: raise OctanceError("invalid evidence relation", 2, "invalid_input")
         return self._append_link(actor_id, "evidence.link", {"evidence_id": evidence_id, "related_id": related_id, "relation": relation}, explicit_key)
@@ -675,6 +740,8 @@ class Project:
         return self._append_link(actor_id, "claim.link", {"claim_id": claim_id, "related_id": related_id, "relation": relation}, explicit_key)
 
     def _append_link(self, actor_id: str, op: str, request: Dict[str, Any], explicit_key: Optional[str]) -> Dict[str, Any]:
+        if request["related_id"] == request.get("evidence_id", request.get("claim_id")):
+            raise OctanceError("self-referential links are not allowed", 2, "invalid_input")
         permission = "evidence.link" if op == "evidence.link" else "claim.link"
         table, id_key = ("evidence", "evidence_id") if op == "evidence.link" else ("claims", "claim_id")
         right_key = "related_id" if op == "evidence.link" else "related_claim_id"
@@ -709,51 +776,124 @@ class Project:
         return rows[0] if rows else None
 
     def _fts_expression(self, query: str) -> str:
-        return " AND ".join('"' + token + '"' for token in re.findall(r"[A-Za-z0-9_]+", query))
+        return " AND ".join('"' + token.replace('"', '""') + '"' for token in re.findall(r"[A-Za-z0-9]+", query))
 
     def search_evidence(self, query: str = "", evidence_type: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
         if not 1 <= limit <= 1000: raise OctanceError("limit must be 1..1000", 2, "invalid_input")
+        if len(query) > 4096: raise OctanceError("search query exceeds 4096 characters", 2, "invalid_input")
+        if len(re.findall(r"[A-Za-z0-9]+", query)) > 64: raise OctanceError("search query exceeds 64 terms", 2, "invalid_input")
+        if query and not re.findall(r"[A-Za-z0-9]+", query): return []
         clauses, params = ["project_id=?"], [self.project_id]
         if evidence_type: clauses.append("type=?"); params.append(evidence_type)
         expr = self._fts_expression(query) if query and self.ledger.fts5 else ""
+        fallback_tokens = []
         if expr:
             clauses.append("evidence_id IN (SELECT evidence_id FROM evidence_fts WHERE evidence_fts MATCH ? AND project_id=?)"); params.extend([expr, self.project_id])
         elif query:
-            clauses.append("(description LIKE ? OR payload_json LIKE ? OR file LIKE ? OR symbol LIKE ?)"); params.extend(["%" + query + "%"] * 4)
-        return self._rows("SELECT * FROM evidence WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC LIMIT ?", params + [limit])
+            fallback_tokens = [token.casefold() for token in re.findall(r"[A-Za-z0-9]+", query)]
+            for token in fallback_tokens:
+                clauses.append("(description LIKE ? OR payload_json LIKE ? OR file LIKE ? OR symbol LIKE ?)")
+                params.extend(["%" + token + "%"] * 4)
+        rows = self._rows("SELECT * FROM evidence WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC" + (" LIMIT ?" if not fallback_tokens else ""), params + ([limit] if not fallback_tokens else []))
+        if fallback_tokens:
+            rows = [row for row in rows if set(fallback_tokens) <= set(re.findall(r"[A-Za-z0-9]+", " ".join(str(row.get(k) or "") for k in ("description", "payload_json", "file", "symbol")).casefold()))]
+        return rows[:limit]
+
+    def _attach_claim_details(self, claims: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not claims:
+            return claims
+        ids = [item["claim_id"] for item in claims]
+        status_by_claim: Dict[str, str] = {}
+        links_by_claim: Dict[str, List[Dict[str, Any]]] = {claim_id: [] for claim_id in ids}
+        conn = self.ledger.connect()
+        try:
+            for offset in range(0, len(ids), 400):
+                batch = ids[offset:offset + 400]
+                placeholders = ",".join("?" for _ in batch)
+                for row in conn.execute("SELECT claim_id,status FROM claim_status_events WHERE claim_id IN (" + placeholders + ") ORDER BY id DESC", batch):
+                    status_by_claim.setdefault(row["claim_id"], row["status"])
+                for row in conn.execute("SELECT claim_id,related_claim_id,relation,agent_id,created_at FROM claim_links WHERE claim_id IN (" + placeholders + ") OR related_claim_id IN (" + placeholders + ")", batch + batch):
+                    record = dict(row)
+                    if row["claim_id"] in links_by_claim:
+                        links_by_claim[row["claim_id"]].append(dict(record, direction="outgoing"))
+                    if row["related_claim_id"] in links_by_claim:
+                        links_by_claim[row["related_claim_id"]].append(dict(record, direction="incoming"))
+        finally:
+            conn.close()
+        for item in claims:
+            item["status"] = status_by_claim.get(item["claim_id"], item["status"])
+            item["links"] = sorted(links_by_claim[item["claim_id"]], key=lambda link: (link["created_at"], link["claim_id"], link["related_claim_id"]))
+        return claims
 
     def get_claim(self, claim_id: str) -> Optional[Dict[str, Any]]:
         rows = self._rows("SELECT * FROM claims WHERE claim_id=? AND project_id=?", (claim_id, self.project_id))
-        return self._claim_record(rows[0]) if rows else None
+        if not rows: return None
+        return self._attach_claim_details([self._claim_record(rows[0])])[0]
 
     def search_claims(self, query: str = "", status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         if not 1 <= limit <= 1000: raise OctanceError("limit must be 1..1000", 2, "invalid_input")
+        if len(query) > 4096: raise OctanceError("search query exceeds 4096 characters", 2, "invalid_input")
+        if len(re.findall(r"[A-Za-z0-9]+", query)) > 64: raise OctanceError("search query exceeds 64 terms", 2, "invalid_input")
+        if query and not re.findall(r"[A-Za-z0-9]+", query): return []
         clauses, params = ["project_id=?"], [self.project_id]
         if status:
             if status not in CLAIM_STATUSES: raise OctanceError("invalid claim status", 2, "invalid_input")
-            clauses.append("status=?"); params.append(status)
+            clauses.append("COALESCE((SELECT status FROM claim_status_events e WHERE e.claim_id=claims.claim_id ORDER BY e.id DESC LIMIT 1),claims.status)=?")
+            params.append(status)
         expr = self._fts_expression(query) if query and self.ledger.fts5 else ""
+        fallback_tokens = []
         if expr:
             clauses.append("claim_id IN (SELECT claim_id FROM claims_fts WHERE claims_fts MATCH ? AND project_id=?)"); params.extend([expr, self.project_id])
         elif query:
-            clauses.append("text LIKE ?"); params.append("%" + query + "%")
-        rows = self._rows("SELECT * FROM claims WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC LIMIT ?", params + [limit])
-        return [self._claim_record(row) for row in rows]
+            fallback_tokens = [token.casefold() for token in re.findall(r"[A-Za-z0-9]+", query)]
+            for token in fallback_tokens:
+                clauses.append("text LIKE ?"); params.append("%" + token + "%")
+        rows = self._rows("SELECT * FROM claims WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC" + (" LIMIT ?" if not fallback_tokens else ""), params + ([limit] if not fallback_tokens else []))
+        if fallback_tokens:
+            rows = [row for row in rows if set(fallback_tokens) <= set(re.findall(r"[A-Za-z0-9]+", row["text"].casefold()))]
+        claims = [self._claim_record(row) for row in rows[:limit]]
+        return self._attach_claim_details(claims)
 
     def brief(self, task: str, files: List[str], symbols: List[str], budget_tokens: int) -> Dict[str, Any]:
         if not 1 <= budget_tokens <= 100000: raise OctanceError("budget-tokens must be 1..100000", 2, "invalid_input")
-        terms = [x for x in re.findall(r"[\w.-]+", task.lower()) if len(x) > 2] + [x.lower() for x in files + symbols]
+        task_terms = set(re.findall(r"[A-Za-z0-9]+", task.casefold()))
+        requested_files = {item.replace("\\", "/").strip("./").casefold() for item in files if item.strip()}
+        requested_symbols = {item.strip().casefold() for item in symbols if item.strip()}
         claims = [c for c in self.search_claims(limit=1000) if c["status"] != "quarantined"]
+        evidence_ids = sorted({evidence_id for claim in claims
+                               for evidence_id in claim["supporting_evidence"] + claim["contradicting_evidence"]})
+        evidence_locations: Dict[str, Dict[str, Optional[str]]] = {}
+        if evidence_ids:
+            conn = self.ledger.connect()
+            try:
+                for offset in range(0, len(evidence_ids), 400):
+                    batch = evidence_ids[offset:offset + 400]
+                    placeholders = ",".join("?" for _ in batch)
+                    for row in conn.execute("SELECT evidence_id,file,symbol FROM evidence WHERE project_id=? AND evidence_id IN (" + placeholders + ")", [self.project_id] + batch):
+                        evidence_locations[row["evidence_id"]] = {"file": row["file"], "symbol": row["symbol"]}
+            finally:
+                conn.close()
         ranked = []
         for claim in claims:
-            haystack = (claim["text"] + " " + claim["kind"]).lower()
-            score = sum(1 for term in set(terms) if term in haystack)
-            if score or not terms: ranked.append((score, claim))
+            text_tokens = set(re.findall(r"[A-Za-z0-9]+", (claim["text"] + " " + claim["kind"]).casefold()))
+            evidence_files, evidence_symbols = set(), set()
+            ids = set(claim["supporting_evidence"] + claim["contradicting_evidence"])
+            for evidence_id in ids:
+                location = evidence_locations.get(evidence_id, {})
+                if location.get("file"): evidence_files.add(location["file"].replace("\\", "/").strip("./").casefold())
+                if location.get("symbol"): evidence_symbols.add(location["symbol"].casefold())
+            task_score = len(task_terms & text_tokens)
+            file_hit = any(stored == requested or stored.endswith("/" + requested) or requested.endswith("/" + stored)
+                           for stored in evidence_files for requested in requested_files)
+            symbol_hit = any(stored == requested or stored.rsplit(".", 1)[-1] == requested
+                             for stored in evidence_symbols for requested in requested_symbols)
+            score = task_score + 3 * int(file_hit or symbol_hit)
+            if score or not (task_terms or requested_files or requested_symbols): ranked.append((score, claim))
         ranked.sort(key=lambda pair: (-pair[0], pair[1]["claim_id"]))
         used, items = 0, []
         max_chars = budget_tokens * 4
         for _, claim in ranked:
-            item = {k: claim[k] for k in ("claim_id", "kind", "status", "text", "evidence_basis", "revision", "agent_id", "supporting_evidence", "contradicting_evidence")}
+            item = {k: claim[k] for k in ("claim_id", "kind", "status", "text", "evidence_basis", "revision", "agent_id", "supporting_evidence", "contradicting_evidence", "depends_on_claims", "links")}
             size = len(canonical(item))
             if used + size > max_chars: break
             items.append(item); used += size
@@ -787,8 +927,14 @@ def diagnose_project(root: Path) -> Dict[str, Any]:
         config_valid = isinstance(config, dict) and config.get("schema") == 1 and config.get("default_trust_tier") in {"low", "standard"} and isinstance(config.get("execution_allowlist"), list)
     except (OSError, ValueError) as error: warnings.append("project config is invalid: " + str(error))
     conn = None; schema = None; journal = None; fts = False; db_error = None
+    database_path = state / "octance.db"
+    if not database_path.is_file():
+        db_error = "database file is missing"
     try:
-        conn = sqlite3.connect(str(state / "octance.db"), timeout=2, isolation_level=None)
+        if database_path.is_file():
+            conn = sqlite3.connect(str(database_path), timeout=2, isolation_level=None)
+        if conn is None:
+            raise sqlite3.DatabaseError(db_error or "database file is missing")
         conn.execute("PRAGMA busy_timeout=2000"); journal = conn.execute("PRAGMA journal_mode").fetchone()[0]
         tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "schema_version" in tables:

@@ -8,6 +8,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+if sys.version_info < (3, 11):
+    raise unittest.SkipTest("the native PIL plugin suite requires Python 3.11+")
+
 from octane.openclaw_bridge import BridgeError, OctaneBridge
 
 
@@ -203,6 +206,7 @@ class OpenClawBridgeTests(unittest.TestCase):
         entry = (root / "openclaw" / "index.js").read_text(encoding="utf-8")
         tools = manifest["contracts"]["tools"]
         self.assertEqual(len(tools), 12)
+        self.assertEqual(manifest["skills"], ["./octance"])
         self.assertEqual(set(tools), set(manifest["toolMetadata"]))
         self.assertTrue(all(manifest["toolMetadata"][name]["optional"] for name in tools))
         self.assertTrue(all(f'name: "{name}"' in entry for name in tools))
@@ -216,12 +220,25 @@ class OpenClawBridgeTests(unittest.TestCase):
         self.assertIn("not an autonomous repair agent", readme)
         self.assertIn("The product is the portable OpenClaw skill in `octance/`", architecture)
         legacy_readme = (root / "openclaw" / "README.md").read_text(encoding="utf-8")
-        self.assertIn("archived, not the Octance skill", legacy_readme)
+        self.assertIn("optional native extension", legacy_readme)
+        self.assertIn("typebox", legacy_readme)
         current_skill = (root / "octance" / "SKILL.md").read_text(encoding="utf-8")
         self.assertTrue(current_skill.startswith("---\nname: octance\n"))
+        root_skill = (root / "SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(root_skill.startswith("---\nname: octance\n"))
+        self.assertEqual(root_skill, current_skill.replace("{baseDir}/scripts/octance.py", "{baseDir}/octance/scripts/octance.py").replace("(references/", "(octance/references/"))
+        self.assertTrue((root / "tests" / "__init__.py").is_file())
         self.assertIn("does not grant filesystem or shell access", current_skill)
-        self.assertIn("does not implement `check`, `explore`, or `locate`", current_skill)
-        self.assertTrue(json.loads((root / "package.json").read_text(encoding="utf-8"))["private"])
+        self.assertIn("does not yet implement a predeclared replayable check runner", current_skill)
+        self.assertIn("`locate` is heuristic", current_skill)
+        self.assertIn("openclaw skills install git:https://github.com/tempothrone-star/Octane.git", readme)
+        package = json.loads((root / "package.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["name"], "octane-openclaw")
+        self.assertFalse(package["private"])
+        self.assertIn("typebox", package["dependencies"])
+        self.assertTrue(any(path.startswith("octance/") for path in package["files"]))
+        self.assertIn("scripts/octance.py", package["files"])
+        self.assertIn("SKILL.md", package["files"])
 
 
 if __name__ == "__main__":

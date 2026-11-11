@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .core import CLAIM_KINDS, CLAIM_STATUSES, EVIDENCE_TYPES, Ledger, OctanceError, Project, canonical, diagnose_project, discover_root, init_project, resolve_project_root
+from .polygraph import build_dependency_graph
+from .source import locate_suspects, source_inventory
 
 EXIT_PERMISSION = 3
 EXIT_CONFLICT = 4
@@ -111,6 +113,11 @@ def build_parser() -> argparse.ArgumentParser:
     link_claim.add_argument("--relation", choices=("supports", "contradicts", "depends_on", "conflicts_with"), required=True)
     link_claim.add_argument("--idempotency-key")
     _common(link_claim)
+    transition_claim = claim_commands.add_parser("status", help="append a claim status transition")
+    transition_claim.add_argument("claim_id")
+    transition_claim.add_argument("--status", choices=sorted(CLAIM_STATUSES), required=True)
+    transition_claim.add_argument("--idempotency-key")
+    _common(transition_claim)
 
     brief = commands.add_parser("brief", help="retrieve compact, ranked project context")
     brief.add_argument("--task", required=True)
@@ -118,6 +125,25 @@ def build_parser() -> argparse.ArgumentParser:
     brief.add_argument("--symbols", default="")
     brief.add_argument("--budget-tokens", type=int, default=2000)
     _common(brief)
+
+    languages = commands.add_parser("languages", help="inventory supported source files without parsing or executing them")
+    languages.add_argument("--max-files", type=int, default=100000)
+    languages.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
+    _common(languages)
+
+    locate = commands.add_parser("locate", help="rank file-level suspects from an existing failure trace")
+    locate.add_argument("--trace-file", required=True, help="UTF-8 trace path relative to the project root")
+    locate.add_argument("--query", default="", help="optional error text or symbol keywords")
+    locate.add_argument("--limit", type=int, default=20)
+    locate.add_argument("--max-files", type=int, default=100000)
+    locate.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
+    _common(locate)
+
+    graph = commands.add_parser("graph", help="build a bounded best-effort internal file dependency graph")
+    graph.add_argument("--max-files", type=int, default=100000)
+    graph.add_argument("--max-file-bytes", type=int, default=5 * 1024 * 1024)
+    graph.add_argument("--max-total-bytes", type=int, default=100 * 1024 * 1024)
+    _common(graph)
     return parser
 
 
@@ -175,10 +201,11 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         root = resolve_project_root(explicit=args.project_root)
         result = init_project(root, args.update_gitignore, args.trust_tier)
         return _response(result, result.pop("warnings", []), ["Run `python3 scripts/octance.py status` to inspect the new ledger"])
-    root = discover_root()
     if args.command == "doctor":
+        root = resolve_project_root()
         result = diagnose_project(root)
         return _response(result, result.get("warnings", []))
+    root = discover_root()
     project = Project(root)
     agent_id = project.agent_id(getattr(args, "agent", None))
     actor = project.ledger.get_agent(agent_id, project.project_id)
@@ -186,7 +213,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         raise OctanceError("agent identity is not registered", 3, "permission_denied")
     connection = project.ledger.connect()
     try:
-        if args.command in {"status", "verify-log", "rebuild"}:
+        if args.command in {"status", "verify-log", "rebuild", "languages", "locate", "graph"}:
             project.ledger._require(connection, actor, "status")
     finally:
         connection.close()
@@ -202,6 +229,43 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         result = project.ledger.rebuild_check(project.project_id)
         if not result["matches"]:
             raise OctanceError("materialized tables do not match event-log replay: " + ", ".join(result.get("mismatches", [])), 1, "rebuild_mismatch")
+        return _response(result)
+    if args.command == "languages":
+        try:
+            return _response(source_inventory(root, args.max_files, args.max_file_bytes))
+        except ValueError as error:
+            raise OctanceError(str(error), 2, "invalid_input")
+    if args.command == "locate":
+        supplied_trace = Path(args.trace_file)
+        if supplied_trace.is_absolute():
+            raise OctanceError("trace file must be a project-relative path", 2, "invalid_input")
+        unresolved_trace = root / supplied_trace
+        if unresolved_trace.is_symlink():
+            raise OctanceError("trace file must not be a symlink", 2, "invalid_input")
+        trace_path = unresolved_trace.resolve()
+        try:
+            trace_path.relative_to(root)
+        except ValueError:
+            raise OctanceError("trace file must be inside the project root", 2, "invalid_input")
+        if not trace_path.is_file():
+            raise OctanceError("trace file must be a regular project-local file", 2, "invalid_input")
+        try:
+            if trace_path.stat().st_size > 5 * 1024 * 1024:
+                raise OctanceError("trace file exceeds the 5 MiB input limit", 2, "invalid_input")
+            trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
+        except OSError as error:
+            raise OctanceError("cannot read trace file: " + str(error), 2, "invalid_input")
+        try:
+            result = locate_suspects(root, trace_text, args.query, args.limit,
+                                     args.max_files, args.max_file_bytes)
+        except ValueError as error:
+            raise OctanceError(str(error), 2, "invalid_input")
+        return _response(result)
+    if args.command == "graph":
+        try:
+            result = build_dependency_graph(root, args.max_files, args.max_file_bytes, args.max_total_bytes)
+        except ValueError as error:
+            raise OctanceError(str(error), 2, "invalid_input")
         return _response(result)
     if args.command == "agent":
         if args.agent_command == "register":
@@ -248,6 +312,8 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
             return _response(project.add_claim(agent_id, args.kind, args.text, args.evidence,
                                                args.contradicting_evidence, args.depends_on, args.idempotency_key),
                              next_steps=["Use only supported evidence; a claim is not a verified result"])
+        if args.claim_command == "status":
+            return _response(project.transition_claim(agent_id, args.claim_id, args.status, args.idempotency_key))
         if args.claim_command == "get":
             connection = project.ledger.connect()
             try:

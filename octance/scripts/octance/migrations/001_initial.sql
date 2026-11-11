@@ -75,7 +75,8 @@ CREATE TABLE evidence_links (
     relation TEXT NOT NULL,
     agent_id TEXT NOT NULL REFERENCES agents(agent_id),
     created_at TEXT NOT NULL,
-    PRIMARY KEY(evidence_id, related_id, relation)
+    PRIMARY KEY(evidence_id, related_id, relation),
+    CHECK (evidence_id <> related_id)
 );
 CREATE TRIGGER evidence_links_no_update BEFORE UPDATE ON evidence_links
 BEGIN SELECT RAISE(ABORT, 'evidence links are append-only'); END;
@@ -117,9 +118,24 @@ CREATE TABLE claim_links (
     relation TEXT NOT NULL,
     agent_id TEXT NOT NULL REFERENCES agents(agent_id),
     created_at TEXT NOT NULL,
-    PRIMARY KEY(claim_id, related_claim_id, relation)
+    PRIMARY KEY(claim_id, related_claim_id, relation),
+    CHECK (claim_id <> related_claim_id)
 );
 CREATE TRIGGER claim_links_no_update BEFORE UPDATE ON claim_links
 BEGIN SELECT RAISE(ABORT, 'claim links are append-only'); END;
 CREATE TRIGGER claim_links_no_delete BEFORE DELETE ON claim_links
 BEGIN SELECT RAISE(ABORT, 'claim links are append-only'); END;
+
+CREATE TABLE claim_status_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    claim_id TEXT NOT NULL REFERENCES claims(claim_id),
+    previous_status TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('asserted','corroborated','contradicted','stale','needs_review','retracted','quarantined')),
+    agent_id TEXT NOT NULL REFERENCES agents(agent_id),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX claim_status_events_claim ON claim_status_events(claim_id,id);
+CREATE TRIGGER claim_status_events_no_update BEFORE UPDATE ON claim_status_events
+BEGIN SELECT RAISE(ABORT, 'claim status events are append-only'); END;
+CREATE TRIGGER claim_status_events_no_delete BEFORE DELETE ON claim_status_events
+BEGIN SELECT RAISE(ABORT, 'claim status events are append-only'); END;

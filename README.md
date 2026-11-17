@@ -24,7 +24,7 @@ npm install --omit=peer
 openclaw plugins install --link . --force
 ```
 
-The plugin manifest bundles this same `octance/` skill. The native plugin tools are optional, use a separate PIL-backed store, and require Node.js and Python 3.11+; the portable skill CLI remains standard-library-only and supports Python 3.9+.
+The native plugin adds an `octane` investigation skill alongside the portable `octance` skill. It uses a separate PIL database to persist multilingual indexes, resumable graph exploration, Docker execution evidence, and patch proposals. See the [native workflow and demonstration](docs/openclaw.md). The native plugin requires Node.js and Python 3.11+. The portable CLI supports Python 3.9+ and uses the standard library.
 
 The skill declares `python3` as its only binary requirement. Keep the target project as the CLI working directory. From this repository, use `python3 scripts/octance.py`; from a separately installed skill, invoke `python3 "$OPENCLAW_WORKSPACE/skills/octance/scripts/octance.py"` while the shell working directory is the target project root.
 
@@ -94,6 +94,9 @@ The repository is building in gated phases. **Phase 1: thin core** is implemente
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python -m unittest discover -s tests -v
+npm test
 ```
+
+`npm test` covers the JavaScript-to-Python bridge, workspace timeout calculation, and npm package contents; it requires Node.js and Python 3.11+. The portable Python tests need no npm dependencies. CI exercises the portable skill on Python 3.9, the full suite on Python 3.11/3.12/3.14, and the optional Tree-sitter extra on Python 3.12. See [`docs/project-review.md`](docs/project-review.md) for the component map, reliability fixes, validation, and remaining limits.
 
 The bundled CLI requires Python 3.9+ and the standard library only. No network access or telemetry is used by Octance. See [`octance/SKILL.md`](octance/SKILL.md) for the concise agent workflow and [`docs/architecture.md`](docs/architecture.md) for the event ledger and Phase 1 data model. Do not interpret unimplemented roadmap items as working functionality.

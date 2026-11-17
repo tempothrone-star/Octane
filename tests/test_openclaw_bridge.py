@@ -12,6 +12,10 @@ if sys.version_info < (3, 10):
     raise unittest.SkipTest("the native PIL plugin suite requires Python 3.10+")
 
 from octane.openclaw_bridge import BridgeError, OctaneBridge
+from octane.native_trace import load_native_trace, native_trace_command
+from octane.runtime_profiles import load_profile_trace
+from octane.analysis import analyzer
+from octane.experiments import _same_output
 
 
 class OpenClawBridgeTests(unittest.TestCase):
@@ -32,6 +36,138 @@ class OpenClawBridgeTests(unittest.TestCase):
     def call(self, operation, **params):
         return self.bridge.dispatch({"operation": operation, "params": params})
 
+    def test_native_trace_plots_only_adjacent_project_frames(self):
+        callee = {"function": "compare", "path": "ops.c", "line": 3, "inline": False}
+        caller = {"function": "dispatch", "path": "entry.c", "line": 15, "inline": True}
+        detached = {"function": "main", "path": "main.c", "line": 24, "inline": False}
+        capture = self.base / "trace.json"
+        raw = {"stacks": [[callee, caller, None, detached]], "hit_symbols": ["compare"],
+               "unavailable_symbols": [], "truncated": False}
+        capture.write_text(json.dumps(raw))
+        trace = load_native_trace(capture, ["compare"])
+        self.assertTrue(trace["available"])
+        self.assertEqual(trace["calls"], [{"caller": caller, "callee": callee}])
+        self.assertIn("n1 -->|line 15| n0", trace["mermaid"])
+        self.assertEqual(trace["mermaid"].count("-->"), 1)
+        callee["path"] = "../outside.c"
+        capture.write_text(json.dumps(raw))
+        self.assertIsNone(load_native_trace(capture, ["compare"]))
+
+    def test_native_trace_accepts_literal_arguments_and_rejects_debugger_expressions(self):
+        command = ["./sapi/cli/php", "-r", 'echo "$a";']
+        self.assertEqual(native_trace_command(command, ["zend_compare"])[-4:], ["--args", *command])
+        for targets in (["zend_compare\nshell id"], ["main", "main"], []):
+            with self.assertRaises(ValueError):
+                native_trace_command(command, targets)
+        with self.assertRaises(ValueError):
+            native_trace_command(["/bin/sh"], ["main"])
+
+    def test_multilingual_symbols_are_searchable_and_ambiguous_overloads_stay_unlinked(self):
+        if not analyzer()[1].ast_backend.available():
+            self.skipTest("the optional Tree-sitter backend is required")
+        (self.allowed / "main.ts").write_text("function helper(x: number) { return x; }\nconst run = (x: number) => helper(x);\n")
+        (self.allowed / "Main.java").write_text(
+            "class Main { static int helper(int x) { return x; } static String helper(String x) { return x; } "
+            "static int run(int x) { return helper(x); } }"
+        )
+        project = self.call("project_create", root=str(self.allowed), name="multilingual")["id"]
+        scan = self.call("scan", projectId=project)
+        self.assertEqual(scan["capabilities"]["tree_sitter_call_candidates"], ["java", "typescript"])
+        found = self.call("graph_find", projectId=project, query="run", language="typescript")["symbols"]
+        self.assertEqual([symbol["path"] for symbol in found], ["main.ts"])
+        graph = self.call("graph_connections", projectId=project, nodeKey=found[0]["node_key"])
+        self.assertEqual([(row["name"], row["metadata"]["static"]) for row in graph["connections"]], [("helper", True)])
+        self.assertIn("line 2", graph["mermaid"])
+        overloaded = self.call("graph_find", projectId=project, query="helper", path="Main.java")["symbols"]
+        self.assertEqual(len({item["node_key"] for item in overloaded}), 2)
+        self.assertFalse(self.call("graph_connections", projectId=project, nodeKey="symbol:Main.java:Main.run")["connections"])
+
+    def test_focus_on_current_checkout_needs_no_registration_and_honors_scope(self):
+        result = self.bridge.dispatch({"operation": "repair_focus", "params": {"path": "app.py", "query": "entry"},
+                                       "context": {"workspaceDir": str(self.allowed)}})
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["files_examined"], 1)
+        self.assertEqual([(edge["caller"]["name"], edge["callee"]["name"]) for edge in result["connections"]],
+                         [("entry", "helper")])
+        self.assertEqual(self.call("project_list"), [])
+        outside = self.outside / "other.py"
+        outside.write_text("def secret(): pass")
+        (self.allowed / "linked.py").symlink_to(outside)
+        with self.assertRaises(PermissionError):
+            self.call("repair_focus", path="linked.py")
+
+    def test_focus_recognizes_commonjs_methods_and_sibling_receiver_calls(self):
+        if not analyzer()[1].ast_backend.available():
+            self.skipTest("the optional Tree-sitter backend is required")
+        (self.allowed / "response.js").write_text(
+            "const res = module.exports = {};\nres.send = function send(src) { return src; };\n"
+            "res.jsonp = function jsonp(src) { return this.send(src); };\n"
+        )
+        response = self.call("repair_focus", query="jsonp")
+        self.assertEqual([node["name"] for node in response["symbols"]], ["res.jsonp"])
+        self.assertEqual([(edge["caller"]["name"], edge["callee"]["name"]) for edge in response["connections"]],
+                         [("res.jsonp", "res.send")])
+
+    def test_triage_lists_mocha_compact_command_and_mixed_case_contracts(self):
+        (self.allowed / "Readme.md").touch()
+        (self.allowed / "History.md").touch()
+        package = self.allowed / "package.json"
+        package.write_text('{"scripts":{"test":"mocha --reporter spec test/"}}')
+        triage = self.call("repair_triage")
+        self.assertEqual(triage["contract_locations"], ["Readme.md", "History.md"])
+        self.assertEqual(triage["baseline_candidates"][0]["quiet_command"], ["npm", "test", "--", "--reporter", "dot"])
+        package.write_text('{"scripts":{"test":"mocha && npm run integration"}}')
+        self.assertNotIn("quiet_command", self.call("repair_triage")["baseline_candidates"][0])
+
+    def test_workspace_comparison_marks_reduced_security_header_references(self):
+        filename = "headers.js"
+        (self.allowed / filename).write_text("res.set('X-Content-Type-Options', 'nosniff');\nres.send(body);\n")
+        project = self.call("project_create", root=str(self.allowed), name="headers")["id"]
+        workspace = self.call("workspace_create", projectId=project, mode="experimentation")["id"]
+        self.addCleanup(self.call, "workspace_destroy", workspaceId=workspace)
+        self.call("workspace_patch", workspaceId=workspace, relativePath=filename, content="res.send(body);\n")
+        notes = self.call("workspace_compare", workspaceId=workspace)["review_notes"]
+        self.assertEqual([(note["path"], note["header"], note["removed_occurrences"]) for note in notes],
+                         [(filename, "x-content-type-options", 1)])
+
+    def test_preservation_output_marks_redacted_and_truncated_values_incomparable(self):
+        ordinary = {"stdout": "stable output\n", "stderr": ""}
+        self.assertTrue(_same_output(ordinary, ordinary))
+        self.assertFalse(_same_output(ordinary, {**ordinary, "stderr": "changed\n"}))
+        for recorded in ({**ordinary, "stdout": "Bearer [REDACTED]"},
+                         {**ordinary, "output_truncated": {"stdout": True}}):
+            self.assertIsNone(_same_output(recorded, recorded))
+
+    def test_speedscope_profile_parses_evented_stacks_without_joining_external_frames(self):
+        profile_file = self.base / "capture.json"
+        trace = {"$schema": "https://www.speedscope.app/file-format-schema.json", "shared": {"frames": [
+            {"name": "main", "file": "file:///workspace/app.py", "line": 1},
+            {"name": "bridge", "file": "/usr/lib/framework.py", "line": 120},
+            {"name": "helper", "file": "app.py", "line": 4},
+        ]}, "profiles": [{"type": "evented", "events": [
+            {"type": kind, "frame": index, "at": time}
+            for time, (kind, index) in enumerate((("O", 0), ("O", 1), ("O", 2), ("C", 2), ("C", 1), ("O", 2), ("C", 2), ("C", 0)))
+        ]}]}
+        profile_file.write_text(json.dumps(trace))
+        result = load_profile_trace(profile_file, self.allowed, "speedscope")
+        self.assertTrue(result["available"])
+        self.assertEqual([(item["caller"]["function"], item["callee"]["function"], item["samples"])
+                          for item in result["calls"]], [("main", "helper", 1)])
+        self.assertIn("-->", result["mermaid"])
+        trace["profiles"][0]["events"].pop()
+        profile_file.write_text(json.dumps(trace))
+        self.assertIsNone(load_profile_trace(profile_file, self.allowed, "speedscope"))
+
+    def test_repair_triage_selects_additional_project_test_runners(self):
+        (self.allowed / "build.gradle.kts").touch()
+        (self.allowed / "gradlew").touch(mode=0o755)
+        (self.allowed / "composer.json").write_text('{"scripts":{"test":["phpunit"]}}')
+        (self.allowed / "app.sln").touch()
+        baselines = self.call("repair_triage")["baseline_candidates"]
+        self.assertIn({"source": "build.gradle.kts", "command": ["./gradlew", "test"]}, baselines)
+        self.assertIn({"source": "composer.json", "command": ["composer", "run-script", "test"]}, baselines)
+        self.assertIn({"source": "app.sln", "command": ["dotnet", "test", "./app.sln"]}, baselines)
+
     def test_allowlist_scopes_project_registration_and_existing_project_access(self):
         with self.assertRaises(PermissionError):
             self.call("project_create", root=str(self.outside), name="outside")
@@ -40,6 +176,80 @@ class OpenClawBridgeTests(unittest.TestCase):
         self.assertEqual([item["id"] for item in self.call("project_list")], [project["id"]])
         with self.assertRaises(KeyError):
             self.call("project_show", projectId="missing")
+
+    def test_repair_triage_starts_from_active_checkout_without_registration(self):
+        (self.allowed / ".git").write_text("gitdir: /unused", encoding="utf-8")
+        (self.allowed / "pyproject.toml").write_text('[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', encoding="utf-8")
+        tests = self.allowed / "tests"
+        tests.mkdir()
+        (tests / "test_app.py").touch()
+        result = self.bridge.dispatch({
+            "operation": "repair_triage", "params": {"path": "app.py"},
+            "context": {"workspaceDir": str(tests)},
+        })
+        self.assertEqual(result["root"], str(self.allowed))
+        self.assertEqual(result["target"], "app.py")
+        self.assertEqual(result["related_test_candidates"], ["tests/test_app.py"])
+        self.assertEqual(result["baseline_candidates"], [
+            {"command": ["python", "-m", "pytest", "-q"], "source": "pyproject.toml"},
+        ])
+        self.assertIsNone(result["project_id"])
+        self.assertEqual(self.call("project_list"), [])
+        project = self.call("project_create", root=str(self.allowed), name="repair")
+        self.assertEqual(self.call("repair_triage")["project_id"], project["id"])
+        self.assertEqual(self.call("repair_triage", projectId=project["id"])["root"], str(self.allowed))
+
+    def test_repair_triage_does_not_guess_an_outside_or_ambiguous_checkout(self):
+        outside_file = self.outside / "package.json"
+        outside_file.write_text('{"scripts":{"test":"run-this"}}', encoding="utf-8")
+        (self.allowed / "package.json").symlink_to(outside_file)
+        result = self.bridge.dispatch({
+            "operation": "repair_triage", "context": {"workspaceDir": str(self.outside)},
+        })
+        self.assertEqual(result["status"], "checkout_required")
+        self.assertEqual(self.call("repair_triage")["baseline_candidates"], [])
+        for path in ("../outside/package.json", "package.json"):
+            with self.assertRaises(PermissionError):
+                self.call("repair_triage", path=path)
+        self.bridge.allowed_roots.append(self.outside)
+        self.assertEqual(self.call("repair_triage")["status"], "checkout_required")
+        self.assertEqual(self.call("repair_triage", root=str(self.outside))["baseline_candidates"], [
+            {"command": ["npm", "test"], "source": "package.json"},
+        ])
+
+    def test_repair_triage_maps_docker_mount_only_to_an_allowed_runtime_workspace(self):
+        request = {"operation": "repair_triage", "params": {"root": "/workspace"}}
+        result = self.bridge.dispatch({**request, "context": {"sandboxed": True, "workspaceDir": str(self.allowed)}})
+        self.assertEqual(result["root"], str(self.allowed))
+        for context in ({"sandboxed": True}, {"sandboxed": True, "workspaceDir": str(self.outside)}):
+            self.assertEqual(self.bridge.dispatch({**request, "context": context})["status"], "checkout_required")
+        with self.assertRaises((FileNotFoundError, PermissionError)):
+            self.bridge.dispatch({**request, "context": {"workspaceDir": str(self.allowed)}})
+
+    def test_repair_triage_selects_a_php_source_build_and_local_phpt_scope(self):
+        for filename in ("buildconf", "configure.ac", "main/php.h", "run-tests.php",
+                         "tests/lang/general.phpt", "ext/example/example.c", "ext/example/tests/specific.phpt"):
+            path = self.allowed / filename
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.touch()
+        first = self.call("repair_triage")["baseline_candidates"][0]
+        self.assertEqual(first["scope"], "tests/lang")
+        self.assertEqual(first["setup_commands"], [
+            ["./buildconf"],
+            ["./configure", "--disable-all", "--enable-cli", "--disable-cgi", "--disable-phpdbg"],
+            ["make", "-j2", "sapi/cli/php"],
+        ])
+        (self.allowed / "Makefile").touch()
+        extension = self.call("repair_triage", path="ext/example/example.c")["baseline_candidates"][0]
+        self.assertEqual(extension["scope"], "ext/example/tests")
+        self.assertEqual(extension["setup_commands"], [["make", "-j2", "sapi/cli/php"]])
+        cli = self.allowed / "sapi/cli/php"
+        cli.parent.mkdir(parents=True)
+        cli.touch(mode=0o755)
+        targeted = self.call("repair_triage", path="ext/example/tests/specific.phpt")["baseline_candidates"][0]
+        self.assertEqual(targeted["setup_commands"], [])
+        self.assertEqual(targeted["command"], ["./sapi/cli/php", "-n", "run-tests.php", "-P", "-q", "-j2",
+                                               "ext/example/tests/specific.phpt"])
 
     def test_scan_and_provenance_operations_use_existing_pil(self):
         project = self.call("project_create", root=str(self.allowed), name="fixture")
@@ -206,7 +416,7 @@ class OpenClawBridgeTests(unittest.TestCase):
         entry = (root / "openclaw" / "index.js").read_text(encoding="utf-8")
         tools = manifest["contracts"]["tools"]
         self.assertEqual(len(tools), 12)
-        self.assertEqual(manifest["skills"], ["./octance"])
+        self.assertEqual(manifest["skills"], ["./openclaw/skills/octane", "./octance"])
         self.assertEqual(set(tools), set(manifest["toolMetadata"]))
         self.assertTrue(all(manifest["toolMetadata"][name]["optional"] for name in tools))
         self.assertTrue(all(f'name: "{name}"' in entry for name in tools))
@@ -219,9 +429,10 @@ class OpenClawBridgeTests(unittest.TestCase):
         self.assertTrue(readme.startswith("# Octance\n"))
         self.assertIn("not an autonomous repair agent", readme)
         self.assertIn("The product is the portable OpenClaw skill in `octance/`", architecture)
-        legacy_readme = (root / "openclaw" / "README.md").read_text(encoding="utf-8")
-        self.assertIn("optional native extension", legacy_readme)
-        self.assertIn("typebox", legacy_readme)
+        for skill_root in manifest["skills"]:
+            self.assertTrue((root / skill_root / "SKILL.md").is_file())
+        native_skill = (root / "openclaw/skills/octane/SKILL.md").read_text(encoding="utf-8")
+        self.assertTrue(native_skill.startswith("---\nname: octane\n"))
         current_skill = (root / "octance" / "SKILL.md").read_text(encoding="utf-8")
         self.assertTrue(current_skill.startswith("---\nname: octance\n"))
         root_skill = (root / "SKILL.md").read_text(encoding="utf-8")

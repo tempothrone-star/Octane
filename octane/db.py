@@ -14,6 +14,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterator
 from urllib.parse import urlsplit, urlunsplit
 
+from .call_plot import call_plot
+
 
 _INITIALIZE_LOCK = threading.RLock()
 
@@ -179,6 +181,16 @@ _MIGRATION_4 = (
     "ALTER TABLE investigations ADD COLUMN assigned_agent_id TEXT REFERENCES agents(id)",
 )
 
+_MIGRATION_5 = (
+    "CREATE TABLE exploration_runs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), investigation_id TEXT NOT NULL REFERENCES investigations(id), revision TEXT NOT NULL, profile_json TEXT NOT NULL, state_json TEXT NOT NULL, status TEXT NOT NULL, created_by TEXT REFERENCES agents(id), updated_at TEXT NOT NULL)",
+    "CREATE INDEX idx_exploration_investigation ON exploration_runs(investigation_id,updated_at)",
+    "ALTER TABLE workspaces ADD COLUMN baseline_path TEXT",
+    "ALTER TABLE workspaces ADD COLUMN snapshot_hash TEXT",
+    "CREATE TABLE execution_runs(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id), investigation_id TEXT REFERENCES investigations(id), evidence_id TEXT REFERENCES evidence(id), command_json TEXT NOT NULL, image TEXT NOT NULL, image_id TEXT, before_hash TEXT NOT NULL, after_hash TEXT, snapshot_hash TEXT NOT NULL, status TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL)",
+    "CREATE INDEX idx_execution_investigation ON execution_runs(investigation_id,created_at)",
+    "CREATE TABLE patch_proposals(id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), investigation_id TEXT NOT NULL REFERENCES investigations(id), workspace_id TEXT NOT NULL REFERENCES workspaces(id), baseline_run_id TEXT NOT NULL REFERENCES execution_runs(id), candidate_run_id TEXT NOT NULL REFERENCES execution_runs(id), evidence_id TEXT NOT NULL REFERENCES evidence(id), created_at TEXT NOT NULL)",
+)
+
 _MIGRATION_3 = (
     "CREATE TABLE graph_edge_history(id TEXT PRIMARY KEY, edge_id TEXT NOT NULL, project_id TEXT NOT NULL REFERENCES projects(id), source_id TEXT NOT NULL, target_id TEXT NOT NULL, kind TEXT NOT NULL, revision TEXT NOT NULL, stale INTEGER NOT NULL, metadata_json TEXT NOT NULL, confidence REAL NOT NULL, provenance_agent_id TEXT, evidence_id TEXT, recorded_at TEXT NOT NULL)",
     "CREATE INDEX idx_graph_edge_history_project ON graph_edge_history(project_id,revision,recorded_at)",
@@ -203,6 +215,7 @@ class ProjectIntelligence:
     """Small, transaction-safe SQLite API shared by deterministic agents."""
 
     def __init__(self, database: str | Path):
+        self._local = threading.local()
         self.database = str(database)
         if self.database == ":memory:":
             raise ValueError("ProjectIntelligence requires a file-backed SQLite database")
@@ -218,6 +231,10 @@ class ProjectIntelligence:
 
     @contextmanager
     def _session(self) -> Iterator[sqlite3.Connection]:
+        active = getattr(self._local, "connection", None)
+        if active is not None:
+            yield active
+            return
         connection = self._connect()
         try:
             yield connection
@@ -236,9 +253,9 @@ class ProjectIntelligence:
             connection.executescript(_SCHEMA)
             connection.execute("INSERT OR IGNORE INTO schema_migrations VALUES(1,?)", (_now(),))
             current = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
-            if current > 4:
+            if current > 5:
                 raise RuntimeError(f"database schema version {current} is newer than this Octane supports")
-            for version, statements in ((2, _MIGRATION_2), (3, _MIGRATION_3), (4, _MIGRATION_4)):
+            for version, statements in ((2, _MIGRATION_2), (3, _MIGRATION_3), (4, _MIGRATION_4), (5, _MIGRATION_5)):
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     current = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
@@ -255,15 +272,29 @@ class ProjectIntelligence:
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
+        active = getattr(self._local, "connection", None)
+        if active is not None:
+            savepoint = "nested_" + uuid.uuid4().hex
+            active.execute("SAVEPOINT " + savepoint)
+            try:
+                yield active
+                active.execute("RELEASE " + savepoint)
+            except Exception:
+                active.execute("ROLLBACK TO " + savepoint)
+                active.execute("RELEASE " + savepoint)
+                raise
+            return
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
+            self._local.connection = connection
             yield connection
             connection.commit()
         except Exception:
             connection.rollback()
             raise
         finally:
+            self._local.connection = None
             connection.close()
 
     @staticmethod
@@ -363,7 +394,8 @@ class ProjectIntelligence:
                 if since_revision not in revisions and since_revision != "unscanned":
                     raise ValueError(f"revision {since_revision!r} is not in this project's history")
                 if since_revision != "unscanned":
-                    changes = changes[revisions.index(since_revision) + 1:]
+                    last_match = max(i for i, revision in enumerate(revisions) if revision == since_revision)
+                    changes = changes[last_match + 1:]
             return {"project_id": project_id, "current_revision": project["revision"], "changes": changes}
 
     def invalidate_stale_knowledge(self, project_id: str, changed_paths) -> dict[str, int]:
@@ -501,12 +533,13 @@ class ProjectIntelligence:
             row["payload"] = json.loads(row.pop("payload_json"))
         return rows
 
-    def mark_evidence_verified(self, evidence_id: str, verification_evidence_id: str, agent_id: str) -> None:
+    def mark_evidence_verified(self, evidence_id: str, verification_evidence_id: str, agent_id: str,
+                               *, require_recorded_run: bool = False) -> None:
         if evidence_id == verification_evidence_id:
             raise ValueError("an evidence record cannot verify itself")
         with self._transaction() as db:
-            evidence = db.execute("SELECT project_id,stale FROM evidence WHERE id=?", (evidence_id,)).fetchone()
-            verification = db.execute("SELECT project_id,evidence_type,verification_status,stale FROM evidence WHERE id=?", (verification_evidence_id,)).fetchone()
+            evidence = db.execute("SELECT project_id,revision,stale FROM evidence WHERE id=?", (evidence_id,)).fetchone()
+            verification = db.execute("SELECT project_id,revision,evidence_type,verification_status,stale FROM evidence WHERE id=?", (verification_evidence_id,)).fetchone()
             if evidence is None or verification is None or evidence["project_id"] != verification["project_id"]:
                 raise ValueError("verification evidence must exist in the same project")
             if evidence["stale"] or verification["stale"]:
@@ -515,6 +548,14 @@ class ProjectIntelligence:
                 raise ValueError("verification requires an observed test or runtime record")
             project_id = evidence["project_id"]
             self._require_permission(db, project_id, agent_id, "verify_evidence")
+            if require_recorded_run:
+                current_revision = self.get_project_revision(project_id)
+                run = db.execute("SELECT before_hash,after_hash,snapshot_hash,status FROM execution_runs WHERE project_id=? AND evidence_id=?",
+                                 (project_id, verification_evidence_id)).fetchone()
+                if (not run or run["status"] != "passed" or run["before_hash"] != run["snapshot_hash"]
+                        or run["after_hash"] != run["snapshot_hash"] or evidence["revision"] != current_revision
+                        or verification["revision"] != current_revision):
+                    raise ValueError("verification needs a recorded passing run on the unchanged snapshot at the finding's current revision")
             db.execute("UPDATE evidence SET verification_status='verified' WHERE id=?", (evidence_id,))
             db.execute("INSERT OR IGNORE INTO evidence_relationships VALUES(?,?,?)", (verification_evidence_id, evidence_id, "verifies"))
             self._audit(db, project_id, agent_id, "evidence.verify", "evidence", evidence_id, {"verification_evidence_id": verification_evidence_id})
@@ -739,6 +780,81 @@ class ProjectIntelligence:
                         {"node_count": len(node_ids), "relationship_count": len(edge_ids)})
             return {"nodes": list(node_ids.values()), "relationships": edge_ids}
 
+    def find_symbols(self, project_id: str, query: str, *, path: str | None = None,
+                     language: str | None = None, limit: int = 20, requesting_agent_id: str | None = None):
+        if not isinstance(query, str) or not 1 <= len(query.strip()) <= 160 or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("symbol search requires a name and a limit of 1 to 100")
+        name = query.strip()
+        pattern = "%" + name.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        filters = ["project_id=?", "stale=0", "kind IN ('function','class')", "name LIKE ? ESCAPE '\\'"]
+        args = [project_id, pattern]
+        for field, value in (("path", path), ("language", language)):
+            if value is not None:
+                filters.append(f"{field}=?")
+                args.append(value)
+        with self._session() as db:
+            if requesting_agent_id:
+                self._require_permission(db, project_id, requesting_agent_id, "read_graph")
+            rows = db.execute(f"""
+                SELECT node_key,kind,name,path,line,language,revision FROM graph_nodes WHERE {' AND '.join(filters)}
+                ORDER BY name=? COLLATE NOCASE DESC,length(name),name,path,line,node_key LIMIT ?
+            """, [*args, name, limit + 1]).fetchall()
+        return {"symbols": [dict(row) for row in rows[:limit]], "truncated": len(rows) > limit}
+
+    def graph_connections(self, project_id: str, node_key: str, *, relationship: str = "calls",
+                          direction: str = "both", limit: int = 30, requesting_agent_id: str | None = None):
+        if direction not in {"incoming", "outgoing", "both"} or type(limit) is not int or not 1 <= limit <= 100:
+            raise ValueError("connections needs incoming, outgoing, or both and a limit of 1 to 100")
+        with self._session() as db:
+            if requesting_agent_id:
+                self._require_permission(db, project_id, requesting_agent_id, "read_graph")
+            node = db.execute("SELECT id,node_key,path,line,name,revision FROM graph_nodes WHERE project_id=? AND node_key=? AND stale=0",
+                              (project_id, node_key)).fetchone()
+            if node is None:
+                raise KeyError(f"unknown current graph node: {node_key}")
+            queries, parameters = [], []
+            for side in (("incoming", "outgoing") if direction == "both" else (direction,)):
+                source, target = ("target_id", "source_id") if side == "incoming" else ("source_id", "target_id")
+                queries.append(f"""
+                    SELECT ? AS direction, n.node_key,n.path,n.line,n.name,n.revision,
+                           e.id AS edge_id,e.kind,e.metadata_json,e.confidence,e.evidence_id
+                    FROM graph_edges e JOIN graph_nodes n ON e.{target}=n.id
+                    WHERE e.project_id=? AND e.{source}=? AND e.kind=? AND e.stale=0 AND n.stale=0
+                """)
+                parameters.extend([side, project_id, node["id"], relationship])
+            rows = db.execute(" UNION ALL ".join(queries) + " ORDER BY direction,node_key,edge_id LIMIT ?",
+                              [*parameters, limit + 1]).fetchall()
+        connections = []
+        for row in rows[:limit]:
+            item = dict(row)
+            item["metadata"] = json.loads(item.pop("metadata_json"))
+            connections.append(item)
+        result = {"node": dict(node), "relationship": relationship, "connections": connections,
+                  "truncated": len(rows) > limit, "basis": "Indexed graph candidates. Use a runtime trace to observe execution."}
+        if relationship == "calls":
+            nodes = {node_key: result["node"], **{item["node_key"]: item for item in connections}}
+            edges = []
+            for item in connections:
+                other = item["node_key"]
+                caller, callee = (other, node_key) if item["direction"] == "incoming" else (node_key, other)
+                edges.append((caller, callee, item["metadata"].get("line")))
+            result["mermaid"] = call_plot(nodes, edges)
+        return result
+
+    def graph_summary(self, project_id: str, limit: int, *, include_stale: bool = False,
+                      requesting_agent_id: str | None = None) -> dict[str, Any]:
+        if type(limit) is not int or not 1 <= limit <= 20:
+            raise ValueError("graph summary limit must be an integer from 1 to 20")
+        condition = "project_id=?" if include_stale else "project_id=? AND stale=0"
+        with self._session() as db:
+            if requesting_agent_id:
+                self._require_permission(db, project_id, requesting_agent_id, "read_graph")
+            nodes = db.execute(f"SELECT node_key,kind,name,path,stale FROM graph_nodes WHERE {condition} ORDER BY node_key LIMIT ?",
+                               (project_id, limit)).fetchall()
+            counts = db.execute(f"SELECT (SELECT count(*) FROM graph_nodes WHERE {condition}) AS node_count, "
+                                f"(SELECT count(*) FROM graph_edges WHERE {condition}) AS edge_count", (project_id, project_id)).fetchone()
+        return {**dict(counts), "nodes": [dict(node) for node in nodes]}
+
     def query_graph(self, project_id: str, node_key: str | None = None, kind: str | None = None,
                     include_stale: bool = False, requesting_agent_id: str | None = None) -> dict[str, list[dict[str, Any]]]:
         with self._session() as db:
@@ -843,6 +959,8 @@ class ProjectIntelligence:
                        (status, json.dumps(payload, sort_keys=True), agent_id, now, investigation_id))
             db.execute("INSERT INTO investigation_checkpoints VALUES(?,?,?,?,?,?)", (checkpoint_id, investigation_id, agent_id, status, json.dumps(payload, sort_keys=True), now))
             if agent_id:
+                db.execute("UPDATE agents SET current_investigation_id=NULL WHERE current_investigation_id=? AND id<>?",
+                           (investigation_id, agent_id))
                 db.execute("UPDATE agents SET current_investigation_id=?,last_activity=? WHERE id=?", (investigation_id, now, agent_id))
             if status in {"completed", "abandoned"}:
                 db.execute("UPDATE agents SET current_investigation_id=NULL WHERE current_investigation_id=?", (investigation_id,))
@@ -944,6 +1062,8 @@ class ProjectIntelligence:
                        (json.dumps(context, sort_keys=True), agent_id, now, investigation_id))
             db.execute("INSERT INTO investigation_checkpoints VALUES(?,?,?,?,?,?)",
                        (checkpoint_id, investigation_id, agent_id, "active", json.dumps(context, sort_keys=True), now))
+            db.execute("UPDATE agents SET current_investigation_id=NULL WHERE current_investigation_id=? AND id<>?",
+                       (investigation_id, agent_id))
             db.execute("UPDATE agents SET current_investigation_id=?,last_activity=? WHERE id=?", (investigation_id, now, agent_id))
             self._audit(db, investigation["project_id"], agent_id, "investigation.resume", "investigation", investigation_id,
                         {"revision": current_revision, "from_status": investigation["status"]})

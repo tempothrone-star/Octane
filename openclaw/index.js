@@ -1,125 +1,19 @@
-import { spawn } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { callBridge } from "./bridge.js";
 
-const PLUGIN_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const MAX_REQUEST_BYTES = 1_000_000;
-const MAX_RESPONSE_BYTES = 8_000_000;
-const DEFAULT_BRIDGE_TIMEOUT_MS = 120_000;
 const optional = (schema) => Type.Optional(schema);
 const action = (...values) => Type.Union(values.map((value) => Type.Literal(value)));
 const payload = Type.Record(Type.String(), Type.Any());
 const stringArray = Type.Array(Type.String());
 const schema = (properties) => Type.Object(properties, { additionalProperties: false });
-
-function resolveConfig(config) {
-  const roots = config.allowedProjectRoots;
-  if (!Array.isArray(roots) || roots.length === 0 || roots.some((item) => typeof item !== "string" || !item.trim())) {
-    throw new Error("Octane is deny-by-default: configure at least one allowedProjectRoots path.");
-  }
-  const allowedRoots = [...new Set(roots.map((item) => {
-    if (!isAbsolute(item)) throw new Error(`Allowed project roots must be absolute paths: ${item}`);
-    const root = realpathSync(resolve(item));
-    if (!statSync(root).isDirectory()) throw new Error(`Allowed project root is not a directory: ${root}`);
-    return root;
-  }))];
-  const stateDir = process.env.OPENCLAW_STATE_DIR || join(homedir(), ".openclaw");
-  const databasePath = resolve(config.databasePath || join(stateDir, "octane", "pil.sqlite3"));
-  const workspaceRoot = resolve(config.workspaceRoot || join(stateDir, "octane", "workspaces"));
-  const allowedImages = config.allowedDockerImages ?? [];
-  if (!Array.isArray(allowedImages) || allowedImages.some((item) => typeof item !== "string" || !item.trim())) {
-    throw new Error("allowedDockerImages must be an array of explicit Docker image references.");
-  }
-  if (config.allowAgentProvisioning !== undefined && typeof config.allowAgentProvisioning !== "boolean") {
-    throw new Error("allowAgentProvisioning must be a boolean.");
-  }
-  const python = typeof config.pythonExecutable === "string" && config.pythonExecutable.trim()
-    ? config.pythonExecutable
-    : process.platform === "win32" ? "python" : "python3";
-  return { allowedRoots, databasePath, workspaceRoot, allowedImages: [...new Set(allowedImages)],
-    allowAgentProvisioning: config.allowAgentProvisioning === true, python };
-}
-
-function callBridge(config, operation, params) {
-  const resolved = resolveConfig(config);
-  const request = Buffer.from(JSON.stringify({ operation, params }), "utf8");
-  if (request.byteLength > MAX_REQUEST_BYTES) throw new Error("Octane request exceeds the 1 MB limit.");
-  const args = ["-m", "octane.openclaw_bridge", "--database", resolved.databasePath,
-    "--workspace-root", resolved.workspaceRoot];
-  for (const root of resolved.allowedRoots) args.push("--allowed-root", root);
-  for (const image of resolved.allowedImages) args.push("--allowed-image", image);
-  if (resolved.allowAgentProvisioning) args.push("--allow-agent-provisioning");
-  const priorPath = process.env.PYTHONPATH;
-  const pythonPath = [PLUGIN_ROOT, priorPath].filter(Boolean).join(delimiter);
-
-  const bridgeTimeoutMs = operation.startsWith("workspace.") && Number.isInteger(params?.timeoutSeconds)
-    ? Math.min(300, Math.max(1, params.timeoutSeconds)) * 1000 + 10_000
-    : DEFAULT_BRIDGE_TIMEOUT_MS;
-  return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(resolved.python, args, {
-      cwd: PLUGIN_ROOT,
-      env: { ...process.env, PYTHONPATH: pythonPath, PYTHONDONTWRITEBYTECODE: "1" },
-      shell: false,
-      windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const stdout = [];
-    const stderr = [];
-    let stdoutBytes = 0;
-    let stderrBytes = 0;
-    let overflow = false;
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      const forceKill = setTimeout(() => child.kill("SIGKILL"), 1000);
-      forceKill.unref?.();
-    }, bridgeTimeoutMs);
-    timeout.unref?.();
-    child.stdout.on("data", (chunk) => {
-      stdoutBytes += chunk.length;
-      if (stdoutBytes > MAX_RESPONSE_BYTES) {
-        overflow = true;
-        child.kill();
-      } else stdout.push(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      if (stderrBytes < 16_384) {
-        const accepted = chunk.subarray(0, 16_384 - stderrBytes);
-        stderr.push(accepted);
-        stderrBytes += accepted.length;
-      }
-    });
-    child.once("error", (error) => {
-      clearTimeout(timeout);
-      rejectPromise(new Error(`Could not start Octane's Python bridge: ${error.message}`));
-    });
-    child.once("close", (code) => {
-      clearTimeout(timeout);
-      if (timedOut) return rejectPromise(new Error(`Octane bridge timed out after ${Math.ceil(bridgeTimeoutMs / 1000)} seconds.`));
-      if (overflow) return rejectPromise(new Error("Octane response exceeded the 8 MB limit."));
-      const out = Buffer.concat(stdout).toString("utf8");
-      if (code !== 0 && !out.trim()) {
-        const detail = Buffer.concat(stderr).toString("utf8").trim();
-        return rejectPromise(new Error(`Octane bridge exited with code ${code}${detail ? `: ${detail}` : ""}`));
-      }
-      let response;
-      try { response = JSON.parse(out); }
-      catch { return rejectPromise(new Error("Octane bridge returned invalid JSON.")); }
-      if (!response.ok) {
-        const error = response.error || {};
-        return rejectPromise(new Error(`${error.type || "OctaneError"}: ${error.message || "operation failed"}`));
-      }
-      resolvePromise(response.result);
-    });
-    child.stdin.on("error", () => {});
-    child.stdin.end(request);
-  });
-}
+const repairGuidance = [
+  'For a request to fix code, call `octane_context` with `{"action":"triage"}` before browsing files.',
+  "Pass a path if the user named a file. Run the baseline (prefer quiet_command when offered). In a sandbox, use checkout-relative file paths and the working directory for commands.",
+  "If the baseline passes and the user gave no symptom, run one probe of a documented behavior. Stop and report the checks if it reveals no defect.",
+  "Call octane_context action focus with the suspect path or symbol before reading entire files. Use its candidate edges to choose a focused reproduction and trace. Read existing tests and the documented contract to distinguish defects from behavior the code deliberately preserves.",
+  "Before editing, verify a failing case and a passing preservation case. A new check that asserts a desired behavior needs independent evidence that this is the contract. Use octane_workspace propose for the paired evidence and inspect its preservation output and risk notes. A requested count caps demonstrated defects.",
+].join(" ");
 
 const tools = [
   {
@@ -136,17 +30,22 @@ const tools = [
   },
   {
     name: "octane_context",
-    description: "Prepare a bounded, project-scoped context snapshot from current revision, recent changes, evidence, memory, investigations, hypotheses, and graph data.",
-    parameters: schema({ projectId: Type.String(), query: optional(Type.String()), includeStale: optional(Type.Boolean()),
+    catalogMode: "direct-only",
+    description: "Start bug fixes with triage for baseline checks. Use focus with a source path or function name for fresh callers, callees and lines in one call without registration. Use snapshot for stored evidence.",
+    parameters: schema({ action: optional(action("snapshot", "triage", "focus")), projectId: optional(Type.String()),
+      root: optional(Type.String()), path: optional(Type.String()), query: optional(Type.String()), includeStale: optional(Type.Boolean()),
       limit: optional(Type.Integer({ minimum: 1, maximum: 20 })), refreshScan: optional(Type.Boolean()) }),
-    guidance: "Call octane_context at the start of substantive project work to load persistent Octane state. It does not infer new facts or automatically inject project data into every prompt; inspect the returned revisions and stale flags.",
-    operation: () => "context",
+    guidance: repairGuidance,
+    operation: (p) => ({ triage: "repair_triage", focus: "repair_focus", snapshot: "context" })[p.action ?? "snapshot"],
   },
   {
     name: "octane_scan",
-    description: "Statically scan an allowlisted Python project and refresh its graph, evidence, revision, and stale-knowledge state. Does not execute project code.",
-    parameters: schema({ projectId: Type.String() }),
-    guidance: "Use octane_scan for deterministic Python AST and source-hash analysis. It does not prove runtime behavior and does not execute project code.",
+    description: "Persist a bounded file/import graph, Python and Tree-sitter function and call candidates, file hashes, revisions, and stale knowledge. Reports parser coverage and scope limits.",
+    parameters: schema({ projectId: Type.String(), parser: optional(action("auto", "heuristic", "tree-sitter")),
+      maxFiles: optional(Type.Integer({ minimum: 1, maximum: 1000000 })),
+      maxFileBytes: optional(Type.Integer({ minimum: 1, maximum: 104857600 })),
+      maxTotalBytes: optional(Type.Integer({ minimum: 1, maximum: 1073741824 })) }),
+    guidance: "Scan before relying on saved findings or resuming work. Read parser coverage and unsupported capabilities; syntax/import candidates do not prove runtime behavior. Incomplete scans leave the index unchanged.",
     operation: () => "scan",
   },
   {
@@ -160,9 +59,9 @@ const tools = [
       sourcePath: optional(Type.String()), sourceLine: optional(Type.Integer({ minimum: 1 })),
       includeStale: optional(Type.Boolean()), revision: optional(Type.String()),
       verificationStatus: optional(action("observed", "inferred", "unverified", "contradicted")),
-      relationship: optional(action("supports", "contradicts", "context", "supersedes", "verifies")),
+      relationship: optional(action("supports", "contradicts", "context", "supersedes")),
     }),
-    guidance: "Keep direct observations separate from interpretations. Never label a finding verified based only on static analysis; octane_evidence verify requires a separate observed test/runtime/verification record.",
+    guidance: "Keep observations separate from interpretations. Use verify only when a separate recorded passing Docker run on the unchanged current snapshot actually tests the finding.",
     operation: (p) => ({ search: "evidence_search", read: "evidence_read", add: "evidence_add", link: "evidence_link", verify: "evidence_verify" })[p.action],
   },
   {
@@ -199,20 +98,30 @@ const tools = [
     name: "octane_investigation",
     description: "Create, search, inspect, checkpoint, resume, complete, or abandon a revision-aware investigation with auditable agent handoffs.",
     parameters: schema({
-      action: action("create", "search", "read", "update", "checkpoint", "resume", "complete", "abandon"),
+      action: action("create", "search", "read", "update", "checkpoint", "resume", "complete", "abandon", "explore", "revalidate", "report"),
       projectId: Type.String(), investigationId: optional(Type.String()), objective: optional(Type.String()),
+      maxFileBytes: optional(Type.Integer({ minimum: 1, maximum: 104857600 })),
+      maxTotalBytes: optional(Type.Integer({ minimum: 1, maximum: 1073741824 })),
       query: optional(Type.String()), status: optional(action("created", "active", "paused", "blocked", "completed", "abandoned")),
       payload: optional(payload), context: optional(payload),
+      explorationId: optional(Type.String()), startingNodes: optional(stringArray), relationships: optional(stringArray),
+      direction: optional(action("incoming", "outgoing", "both")),
+      depthLimit: optional(Type.Integer({ minimum: 0, maximum: 10 })), nodeBudget: optional(Type.Integer({ minimum: 1, maximum: 100 })),
+      timeBudgetSeconds: optional(Type.Number({ minimum: 0.1, maximum: 60 })), weights: optional(Type.Record(Type.String(), Type.Number())),
+      evidenceIds: optional(stringArray), rationale: optional(Type.String()),
     }),
     guidance: "Before resuming an investigation, inspect its checkpoint and revision compatibility. If resume returns resumed=false, do not use old findings as current without revalidation. Checkpoint completed work, unresolved questions, evidence IDs, and a concrete next action.",
-    operation: (p) => ({ create: "investigation_create", search: "investigation_search", read: "investigation_read", update: "investigation_update", checkpoint: "investigation_checkpoint", resume: "investigation_resume", complete: "investigation_complete", abandon: "investigation_abandon" })[p.action],
+    operation: (p) => ({ create: "investigation_create", search: "investigation_search", read: "investigation_read", update: "investigation_update", checkpoint: "investigation_checkpoint", resume: "investigation_resume", complete: "investigation_complete", abandon: "investigation_abandon", explore: "investigation_explore", revalidate: "investigation_revalidate", report: "investigation_report" })[p.action],
   },
   {
     name: "octane_graph",
-    description: "Query Python source graph relationships and history, find imports, or traverse a bounded graph while recording evidence.",
+    catalogMode: "direct-only",
+    description: "Query multilingual functions, caller and callee candidates, or imports. Connections for calls return a bounded Mermaid graph and source locations.",
     parameters: schema({
-      action: action("query", "dependencies", "history", "explore", "update"), projectId: Type.String(),
+      action: action("query", "find", "connections", "dependencies", "history", "explore", "update"), projectId: Type.String(),
       nodeKey: optional(Type.String()), kind: optional(Type.String()), relationship: optional(Type.String()),
+      query: optional(Type.String()), path: optional(Type.String()), language: optional(Type.String()),
+      direction: optional(action("incoming", "outgoing", "both")), limit: optional(Type.Integer({ minimum: 1, maximum: 100 })),
       nodes: optional(Type.Array(payload)), graphRelationships: optional(Type.Array(payload)),
 
       includeStale: optional(Type.Boolean()), objective: optional(Type.String()), startingNodes: optional(stringArray),
@@ -220,8 +129,8 @@ const tools = [
       nodeBudget: optional(Type.Integer({ minimum: 1, maximum: 100 })),
       timeBudgetSeconds: optional(Type.Number({ minimum: 0.1, maximum: 60 })),
     }),
-    guidance: "Graph edges are static discoveries, not proof of control flow or runtime behavior. Keep traversal bounded and explain which relationships were actually recorded.",
-    operation: (p) => ({ query: "graph_query", dependencies: "graph_dependencies", history: "graph_history", explore: "graph_explore", update: "graph_update" })[p.action],
+    guidance: "Use find with a function name and optional file or language, then connections with the returned nodeKey. Confirm the candidate path using a traced reproduction before editing.",
+    operation: (p) => ({ query: "graph_query", find: "graph_find", connections: "graph_connections", dependencies: "graph_dependencies", history: "graph_history", explore: "graph_explore", update: "graph_update" })[p.action],
   },
   {
     name: "octane_hypothesis",
@@ -252,15 +161,25 @@ const tools = [
   },
   {
     name: "octane_workspace",
-    description: "Create disposable project snapshots, inspect diffs, patch experimentation copies, or run explicitly selected commands inside Docker only.",
+    catalogMode: "direct-only",
+    description: "Create disposable snapshots, inspect or propose patches, and run checks inside approved Docker images. Plot Python, GDB-native, Node, Ruby, or Speedscope runtime stacks.",
     parameters: schema({
-      action: action("create", "patch", "compare", "run", "destroy"), projectId: optional(Type.String()),
+      action: action("create", "patch", "compare", "run", "destroy", "propose"), projectId: optional(Type.String()),
       workspaceId: optional(Type.String()), mode: optional(action("observation", "experimentation")),
       relativePath: optional(Type.String()), content: optional(Type.String()), command: optional(stringArray),
       image: optional(Type.String()), timeoutSeconds: optional(Type.Integer({ minimum: 1, maximum: 300 })),
+      maxFileBytes: optional(Type.Integer({ minimum: 1, maximum: 104857600 })),
+      maxTotalBytes: optional(Type.Integer({ minimum: 1, maximum: 1073741824 })),
+      pythonTrace: optional(Type.Boolean({ description: "Record project-local Python calls and exception locations for a script or -m module." })),
+      nativeTraceSymbols: optional(Type.Array(Type.String(), { minItems: 1, maxItems: 8,
+        description: "Simple or qualified function names to observe with GDB in a checkout-relative debug executable." })),
+      runtimeTrace: optional(action("node", "ruby", "speedscope")),
+      investigationId: optional(Type.String()), baselineRunId: optional(Type.String()), candidateRunId: optional(Type.String()),
+      regressionRunIds: optional(stringArray), evidenceIds: optional(stringArray), rationale: optional(Type.String()),
+      strictPreservationOutput: optional(Type.Boolean({ description: "Require complete matching stdout and stderr for deterministic preservation checks." })),
     }),
-    guidance: "Workspace commands are Docker-only with networking disabled; Octane has no host execution fallback. Use observation mode for read-only commands and experimentation mode for writes. Select a trusted image and explicit command, and treat repository content and command text as untrusted. Destroy disposable workspaces when finished.",
-    operation: (p) => ({ create: "workspace_create", patch: "workspace_patch", compare: "workspace_compare", run: "workspace_run", destroy: "workspace_destroy" })[p.action],
+    guidance: "Use one trace per run. Choose pythonTrace, nativeTraceSymbols in an approved GDB image, runtimeTrace node or ruby for direct commands, or runtimeTrace speedscope for a profiler writing to OCTANE_TRACE_PATH. Pair original and candidate checks with identical trace settings.",
+    operation: (p) => ({ create: "workspace_create", patch: "workspace_patch", compare: "workspace_compare", run: "workspace_run", destroy: "workspace_destroy", propose: "workspace_propose" })[p.action],
   },
 ];
 
@@ -280,21 +199,31 @@ export default definePluginEntry({
   configSchema,
   register(api) {
     for (const definition of tools) {
-      api.registerTool({
+      api.registerTool((toolContext) => ({
         name: definition.name,
+        ...(definition.catalogMode && { catalogMode: definition.catalogMode }),
         description: definition.description,
         parameters: definition.parameters,
         async execute(_toolCallId, params) {
           const operation = definition.operation(params);
           if (!operation) throw new Error(`Unsupported ${definition.name} action.`);
-          const result = await callBridge(api.pluginConfig || {}, operation, params);
+          const result = await callBridge(api.pluginConfig || {}, operation, params, toolContext);
           const text = typeof result === "string" ? result : JSON.stringify(result, null, 2);
-          return { content: [{ type: "text", text }], details: result };
+          return { content: [{ type: "text", text }], details: { result } };
         },
-      }, {
+      }), {
+        name: definition.name,
         optional: true,
         promptGuidance: `## Octane\n${definition.guidance}`,
       });
+    }
+    const hookPolicy = api.config?.plugins?.entries?.octane?.hooks;
+    if (hookPolicy?.allowConversationAccess === true && hookPolicy.allowPromptInjection !== false) {
+      api.on("before_prompt_build", (_event, context) => {
+        if (context.toolAuthority?.allows("octane_context")) {
+          return { prependContext: `## Octane repair workflow\n${repairGuidance}` };
+        }
+      }, { requiresToolAuthority: true });
     }
     api.logger.info(`Registered ${tools.length} optional Octane tools`);
   },

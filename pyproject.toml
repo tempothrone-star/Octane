@@ -15,4 +15,8 @@ dependencies = []
 ast = ["tree-sitter-languages==1.10.2", "tree-sitter==0.21.3"]
 
 [tool.setuptools.packages.find]
-include = ["octane*"]
+include = ["octane*", "octance.scripts*"]
+
+[tool.setuptools.package-data]
+octane = ["*.cjs", "*.rb"]
+"octance.scripts.octance" = ["migrations/*.sql"]

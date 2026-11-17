@@ -6,8 +6,9 @@
   "type": "module",
   "files": [
     "SKILL.md",
-    "openclaw/index.js",
+    "openclaw/*.js",
     "openclaw/README.md",
+    "openclaw/skills/octane/SKILL.md",
     "openclaw.plugin.json",
     "octance/SKILL.md",
     "octance/references/**",
@@ -15,12 +16,17 @@
     "octance/scripts/octance/*.py",
     "octance/scripts/octance/migrations/*.sql",
     "octane/*.py",
+    "octane/*.cjs",
+    "octane/*.rb",
     "scripts/octance.py",
     "README.md",
-    "docs/architecture.md",
-    "docs/openclaw.md",
+    "docs/*.md",
     "pyproject.toml"
   ],
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:python": "python3 -m unittest discover -s tests -v"
+  },
   "dependencies": {
     "typebox": "^1.4.3"
   },

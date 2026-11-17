@@ -312,14 +312,15 @@ def _python_imports(path: str, text: str) -> Tuple[List[Tuple[str, int, int, boo
     return results, 0
 
 
-def _go_module(root: Path) -> Optional[str]:
-    path = root / "go.mod"
-    try:
-        if path.is_symlink() or path.stat().st_size > 1024 * 1024:
+def _go_module(root: Path, text: Optional[str] = None) -> Optional[str]:
+    if text is None:
+        path = root / "go.mod"
+        try:
+            if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+                return None
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
             return None
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
     match = re.search(r"(?m)^\s*module\s+([^\s]+)", text)
     return match.group(1) if match else None
 
@@ -443,7 +444,7 @@ def _candidate_paths(spec: str, source_path: str, language: str, root: Path,
 def build_dependency_graph(root: Path, max_files: int = 100000,
                            max_file_bytes: int = 5 * 1024 * 1024,
                            max_total_bytes: int = 100 * 1024 * 1024,
-                           parser: str = "auto") -> Dict[str, Any]:
+                           parser: str = "auto", *, snapshot=None) -> Dict[str, Any]:
     """Extract a bounded, best-effort internal file dependency graph.
 
     The optional Tree-sitter backend supplies concrete syntax trees for bundled
@@ -455,7 +456,7 @@ def build_dependency_graph(root: Path, max_files: int = 100000,
     if parser == "tree-sitter" and not ast_backend.available():
         raise ValueError("Tree-sitter is optional; install Octane with the [ast] extra")
     root = root.resolve()
-    inventory = source_inventory(root, max_files, max_file_bytes)
+    inventory, captured = snapshot if snapshot is not None else (source_inventory(root, max_files, max_file_bytes), None)
     if not 1 <= max_total_bytes <= 1024 * 1024 * 1024:
         raise ValueError("max_total_bytes must be 1..1073741824")
     contents: Dict[str, Tuple[str, str]] = {}
@@ -467,15 +468,18 @@ def build_dependency_graph(root: Path, max_files: int = 100000,
         if total_bytes + size > max_total_bytes:
             skipped_total += 1
             continue
-        try:
-            if path.is_symlink():
+        if captured is not None:
+            text = captured[item["path"]].decode("utf-8-sig", errors="replace")
+        else:
+            try:
+                if path.is_symlink():
+                    continue
+                text = path.read_text(encoding="utf-8-sig", errors="replace")
+            except OSError:
                 continue
-            text = path.read_text(encoding="utf-8-sig", errors="replace")
-        except OSError:
-            continue
         contents[item["path"]] = (item["language"], text)
         total_bytes += size
-    module = _go_module(root)
+    module = _go_module(root, captured.get("go.mod", b"").decode("utf-8", "replace") if captured is not None else None)
     java_map = _java_packages(contents)
     edges: List[Dict[str, Any]] = []
     unresolved: List[Dict[str, Any]] = []

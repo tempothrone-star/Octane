@@ -1,12 +1,18 @@
-# Investigation workflow and current limits
+# Portable Octance triage
 
-The long-term policy is reproducer-first: establish a failing check before claiming a cause, localize ranked suspects, explore the strongest candidates under budgets, and actively seek evidence that contradicts a hypothesis. The current implementation is only the first static triage slice; it has not passed a representative localization benchmark.
+Establish a failing check before claiming a cause. Use the portable CLI to narrow what to inspect, then seek evidence that could disprove the hypothesis.
 
-`languages` performs bounded extension inventory. `locate --trace-file failure.log` parses common Python, JavaScript/TypeScript, Go, Java, Rust, and C/C++ frame shapes, then ranks source files using frame repetition/order, path query terms, and recent Git changes. It does not parse complete language grammars, execute checks, or label a suspect as a root cause. Keep trace files within the project root; Octance reads them as untrusted text.
+`languages` performs bounded extension inventory. `locate --trace-file failure.log` parses common Python, JavaScript/TypeScript, Go, Java, Rust, and C/C++ frame shapes. It ranks source files using frame repetition and order, path query terms, and recent Git changes. Run approved checks through the host's authorized tools and save the trace as project-local text.
 
-There is no predeclared replayable check runner or general `explore` command yet. Run approved checks with the host agent's authorized tools and save their output to a project-local trace file before using `locate`. All resulting evidence is still `unverified`; a trace alone does not verify a claim. The shipped synthetic ranking benchmark is a mechanics regression test, not a real-project evaluation and not a go decision for later features.
+`graph` returns candidate file dependencies. It combines Python AST, language-specific recognizers, generic import patterns, and optional Tree-sitter syntax trees. Install the parser extra with `python3 -m pip install '.[ast]'` from the full repository checkout using Python 3.11+. Use `graph --parser tree-sitter` to require that backend. Check parser coverage and unresolved edges before relying on the graph.
 
-Example of supported Phase 1 use:
+To add project-specific suffixes or import rules, use a data-only `.octance/languages.json` and pass `--language-config .octance/languages.json` to `languages`, `graph`, or `locate`. Entries support `extensions`, `quoted_import_keywords`, `module_import_keywords`, and `from_import`. For example, this entry recognizes `.qz` files and `fetch "helper"` imports.
+
+```json
+{"languages": {"quartz": {"extensions": [".qz"], "quoted_import_keywords": ["fetch"]}}}
+```
+
+Record the source observation and your interpretation separately.
 
 ```sh
 python3 "{baseDir}/scripts/octance.py" evidence add \
@@ -16,4 +22,4 @@ python3 "{baseDir}/scripts/octance.py" claim add \
   --kind hypothesis --text "Normalization may affect validation" --evidence EV-0001
 ```
 
-A static observation is evidence that the recorded source structure was seen at a particular revision; it is not proof of runtime behavior or a defect.
+Use the revision and path to revisit the observation. Use a focused reproduction or runtime trace to check how the code behaves.

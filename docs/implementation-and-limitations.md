@@ -1,38 +1,43 @@
-# Octance implementation and limitations report — Phase 1
+# Implementation and limitations
 
-## Implemented
+## Portable Octance
 
-Phase 1 is a portable OpenClaw skill in `octance/` backed by a deterministic Python 3.9+ standard-library CLI. It creates one SQLite/WAL database per project; writes UTC event records chained with SHA-256 and an external project JSON anchor; derives idempotency keys; verifies the event chain; and compares supported materialized tables against event replay.
+The standalone skill provides a Python 3.9+ standard-library CLI. It records evidence and claims in a project-local SQLite ledger, quarantines low-trust claims, verifies an anchored SHA-256 event chain, and compares materialized state with event replay. Evidence stays `unverified` in this ledger. Run checks with the host's authorized tools and record the observation with its source and revision. See the [portable command reference](../octance/SKILL.md).
 
-Implemented commands: `init`, `doctor`, `status`, `verify-log`, `rebuild --check`; `agent register/show/whoami`; `evidence add/get/search/link`; `claim add/get/search/link`; bounded keyword `brief`; read-only `languages` inventory; heuristic file-level `locate` from a project-local trace; and bounded `graph` for best-effort project-local dependency edges. Project UUID/root mismatch is refused. Agent roles/permissions are checked by the CLI, low-trust claims are quarantined and excluded from briefings, and secret-like values are best-effort redacted at ingestion. No CLI command can set evidence to executed/replayed or a claim to verified. The three analysis commands do not execute project code or persist source scans. A read-only inventory smoke check on this checkout found 23 source files across Python (21), JavaScript (1), and SQL (1), with no walk truncation; it classified but did not parse or execute those files. A separate controlled graph fixture resolved internal imports in Python, JavaScript-to-TypeScript, Go, Java, Rust, and C++-to-C, but does not establish grammar coverage on production repositories.
+| Command | What it reports |
+| --- | --- |
+| `languages` | Bounded inventory by extension. |
+| `graph` | Candidate project-local file dependencies with parser coverage and unresolved imports. It uses Python AST, optional Tree-sitter, and text recognizers. |
+| `locate --trace-file failure.log` | Ranked file suspects from a saved trace, query terms, and recent Git changes. It includes traceback and recent-change baselines. |
+| `brief` | Ranked claims and open questions. The token estimate covers selected claim records. Other response fields and pretty-print whitespace can increase the output. |
 
-The bundled skill has portable `SKILL.md`/`scripts`/`references` structure and declares only `python3` under `metadata.openclaw.requires.bins`. The CLI is also runnable from the repository root through `scripts/octance.py`.
+Revision hashing can be expensive on large trees. SQLite WAL expects local storage. The hash chain and local anchor detect alterations under the CLI's integrity model. Shell or database access can modify both. Keep credentials out of descriptions and evidence payloads.
 
-## Phase 1 tests and output
+## Native Octane
 
-Runner: Python standard-library `unittest`. The Octance Phase 1 tests exercise project identity/isolation, hash-chain edit/deletion/reorder detection, idempotency, immutability, replay comparison, role permissions, trust quarantine, secret redaction, schema-newer refusal, FTS5/LIKE search, concurrent process writers, transaction rollback, bounded brief, doctor reporting, and explicit `.gitignore` consent.
+The OpenClaw plugin adds checkout triage, candidate function relationships, runtime traces for specific probes, and a separate SQLite store for revision-aware investigations. A scan reports parser and budget gaps. A saved checkpoint carries its project revision, evidence references, and exploration position. Scan and revalidate before reusing a checkpoint after the checkout changes. See the [native workflow](openclaw.md).
 
-Latest review validation (2026-11-15): `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -q` — **71 tests, OK, one optional-parser skip**. With the pinned Tree-sitter extra installed in an isolated Python 3.12 environment: **73 tests, OK, two expected dependency-absence skips**. `npm test` adds three checks for the JavaScript/Python bridge and package contents. The legacy suite verifies that the separate native engine still works, not that its capabilities belong to portable Octance. See [the project review](project-review.md) for reproduced defects, fixes, and validation boundaries.
+- Static edges describe potential calls or imports. Resolve ambiguity from source and test execution. Dynamic dispatch, overloads, and cross-language calls can leave gaps.
+- Runtime traces observe the selected command and supported process. Sampling may miss short calls. A passing test establishes the behavior its assertions checked.
+- Patch proposals require current intent evidence, a matched failing-to-passing reproduction, and passing checks for preserved behavior. Proposals cover text edits to existing files. Review the diff and test coverage before applying it to the requested checkout.
+- Docker experiments require an eligible local image with the needed tools and dependencies. Container networking is disabled. OpenClaw tool policy and allowed checkout roots govern access.
 
-### Preliminary synthetic localization comparison
+## Portable localization benchmark
 
-Command: `PYTHONDONTWRITEBYTECODE=1 python3 tests/benchmark_localization.py`. On the current three authored Python, TypeScript, and Go trace/change fixtures, file-level ranking scores top-1 **1.00** and MRR **1.00**; the format-aware traceback baseline also scores **1.00/1.00**; recent-change scores **0.00/0.00**. These synthetic labels were authored with the fixtures and no project code was executed. The heuristic does not outperform the traceback baseline on these cases. This is not independent ground truth or a real-project benchmark and does not pass the required go/no-go gate.
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 tests/benchmark_localization.py
+```
 
-## Known limitations and not-yet-implemented items
+The three authored Python, TypeScript, and Go cases test file-ranking mechanics.
 
-The later localization gate has **not passed**. There is no predeclared replayable check runner, runtime trace capture, budgeted `explore`, function/symbol localization, representative real-project benchmark, or independent cause labels. `languages` inventories extensions; `locate` ranks files from common or registered-extension frame formats and Git changes. `graph` emits best-effort file dependency edges, not a complete call graph. Python uses the standard-library AST; users may opt into a pinned, offline Tree-sitter grammar bundle for a subset of languages, which produces concrete syntax trees rather than semantic ASTs. Unsupported grammars and the default standard-library-only install use conservative text patterns. The included three-case synthetic benchmark can be rerun with `PYTHONDONTWRITEBYTECODE=1 python3 tests/benchmark_localization.py`; its controlled MRR/top-1 numbers are a mechanics smoke test, not a real-project score or go/no-go result. Full grammars for every listed language, complete cross-language call resolution, symbol footprints, stale/needs-review propagation, investigations, leases, checkpoints, resume protocol, optimistic concurrency, patch proposals, evidence-linked reports, and export are not implemented. Do not claim root-cause localization, code verification, precise staleness, or automated handoff.
+| Ranker | Top-1 | Mean reciprocal rank |
+| --- | ---: | ---: |
+| Octance heuristic | 1.00 | 1.00 |
+| Traceback-first | 1.00 | 1.00 |
+| Recent-change-first | 0.00 | 0.00 |
 
-The log is tamper-evident, not tamper-proof. The project anchor is stored in local JSON beside the SQLite database, and an operator with shell access can edit both. SQLite WAL is unsupported on some network filesystems. Revision computation hashes file paths and contents (excluding `.git`, `.octance`, symlinks, and common generated directories) and may be expensive on very large projects. Secret pattern filtering is incomplete. No representative benchmark numbers or agent-level comparisons have been measured.
+The labels and traces were authored with the fixtures. These scores apply to the included cases. Assess bug-fix accuracy separately with representative defects and independent expected behavior.
 
-## OpenClaw and ClawHub assumptions
+## Validation
 
-| Assumption | Status | Basis |
-|---|---|---|
-| Skill structure and load timing | **Verified in docs; not runtime-tested here.** A skill is a directory with `SKILL.md`; discovery metadata is read for the skill catalog/system prompt, and the instructions are supplied when the skill is active. Supporting references are loaded on demand by the agent. | [OpenClaw skill guide](https://docs.openclaw.ai/tools/skills), [Agent Skills specification](https://agentskills.io/specification) |
-| Multiple agents/subagents | **Platform capability verified; target setup unverified.** OpenClaw documents independently queued subagents, a default max of eight concurrent child runs per spawning session, and configurable multi-agent entries. The operator's policy, tool visibility, and actual parallel availability have not been tested. | [Subagents](https://docs.openclaw.ai/tools/subagents), [Concurrency and recovery](https://docs.openclaw.ai/tools/subagents/operations) |
-| Script/file access and sandboxing | **Docs verified; target runtime unverified.** A skill does not grant execution or filesystem access. `exec` is a shell surface, sandboxing is off by default, and sandbox/workspace policy changes what files it can access. The deployment must explicitly provide Python and authorize shell/file access to the target root. | [Exec tool](https://docs.openclaw.ai/tools/exec), [Workspace access](https://docs.openclaw.ai/gateway/sandboxing/workspace-access) |
-| ClawHub file acceptance | **Verified in docs; no publication performed.** ClawHub accepts a folder containing `SKILL.md` and supporting regular files, including text-based `.py` and `.sql`; it documents a 50 MB bundle limit. This skill contains UTF-8 text only. | [ClawHub skill format](https://docs.openclaw.ai/clawhub/skill-format) |
-| Skill `version` frontmatter | **Prompt differs from current docs; omitted.** The prompt template shows a top-level `version`, but the current OpenClaw/ClawHub frontmatter reference does not list it as a supported key and says publish version is set by the ClawHub CLI. The skill follows documented `name`, one-line `description`, and `metadata.openclaw.requires.bins`. | [Creating skills](https://docs.openclaw.ai/tools/creating-skills), [Skill format](https://docs.openclaw.ai/clawhub/skill-format) |
-| ClawHub installation/publish validation | **Unverified.** The ClawHub CLI and a live OpenClaw Gateway are not installed/tested in this environment. Nothing has been published. | Not exercised |
-
-The ClawHub format page requires `SKILL.md` (or accepted legacy names), allows optional supporting files, and says public skill versions are assigned on publish. No registry-authenticated operation was performed.
+See the [project review](project-review.md) for regression coverage and GitHub Actions results. The [native Docker demonstration](openclaw.md#reproduce-the-native-demonstration) exercises a failing reproduction, an overbroad patch that breaks documented behavior, and a smaller candidate that passes both checks.

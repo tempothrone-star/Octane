@@ -1,7 +1,7 @@
-# Investigation handoff
+# Portable Octance session handoff
 
-Octance is intended to keep project knowledge available across session resets and agent handoffs. Phase 1 currently has project-local evidence, claims, and a bounded briefing, but it has no investigation table, checkpoint command, lease, or resume protocol.
+The portable ledger preserves evidence and claims across session resets. Use a conversation summary to carry the investigation's place in the work.
 
-Before stopping, provide a normal OpenClaw conversation summary with completed checks, evidence IDs, unresolved questions, affected paths, and next steps. Record important observations and claims in Octance first. Do not state that Octance persisted a handoff packet until the future investigation/checkpoint phase is implemented and tested.
+Before stopping, record important observations and claims in Octance. Include completed checks, evidence IDs, unresolved questions, affected paths, and the next action in the summary.
 
-On a fresh session, orient with `status` and `brief`, then independently re-open relevant code and re-run suitable tests. The ledger does not yet report whether earlier claims remain valid after edits.
+In a fresh session, use `status` and `brief`. Inspect the relevant code and repeat suitable checks before relying on claims recorded at an earlier revision. Native Octane checkpoints are stored in the separate Gateway-side database.

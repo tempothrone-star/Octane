@@ -1,6 +1,6 @@
-# Project review — 2026-11-15
+# Project review
 
-Octance's core is a portable, project-local evidence ledger. Its strongest property is the separation of observations, claims, and an auditable event history. The main maintenance risk is that the repository also ships a second, older engine with a different database, feature set, and execution boundary. Changes must be validated against both entry paths.
+The portable Octance ledger keeps observations, claims, and auditable events in the project. The native Octane plugin adds project intelligence, saved investigations, and controlled Docker execution in a separate store. Validate changes through the entry point that owns the behavior and through both paths when they share code.
 
 ## Component map
 
@@ -12,8 +12,9 @@ Octance's core is a portable, project-local evidence ledger. Its strongest prope
 | `octance/scripts/octance/core.py` | Project identity, evidence, claims, search, event reducers, integrity, briefings | `.octance/octance.db`, `project.json`, and `config.json` per project |
 | `source.py`, `polygraph.py`, `ast_backend.py` | Extension inventory, trace ranking, dependency extraction, optional Tree-sitter parsing | Read-only heuristics; do not execute analyzed code or establish causation |
 | `openclaw/index.js`, `openclaw/bridge.js` | Register 12 optional native tools and transport JSON to Python | Operator-configured project roots; subprocess size and timeout limits |
-| `octane/openclaw_bridge.py`, `octane/db.py` | Native tool dispatch and the older Project Intelligence Layer | Separate operator-configured SQLite database; not the portable ledger |
-| `octane/exploration.py`, `octane/workspace.py` | Older Python scanning, graph exploration, snapshot comparison, Docker execution | Execution is limited to explicit Docker workspaces/images; portable Octance has no runner |
+| `octane/openclaw_bridge.py`, `octane/db.py` | Native tool dispatch and Project Intelligence Layer | Gateway-side, operator-configured SQLite database |
+| `octane/repair.py`, `octane/focus.py`, `octane/scanner.py` | Checkout triage, working-copy symbol lookup, and persisted multilingual indexing | Bounded static analysis with parser coverage |
+| `octane/investigation.py`, `octane/workspace.py`, `octane/experiments.py` | Saved exploration, snapshot comparison, runtime traces, and patch proposals | Execution uses explicit commands and approved Docker images. Proposals store the diff with paired checks and intent evidence. |
 
 ```mermaid
 flowchart LR
@@ -22,16 +23,16 @@ flowchart LR
     Skill --> Triage[Static inventory / graph / trace ranking]
     Agent --> Plugin[Optional OpenClaw tools]
     Plugin --> Bridge[JavaScript / Python JSON bridge]
-    Bridge --> PIL[Separate legacy PIL database]
+    Bridge --> PIL[Native PIL database]
     Bridge --> Workspace[Disposable workspace manager]
     Workspace --> Docker[Explicit Docker execution]
 ```
 
-Writes validate the actor and references, redact known secret patterns, compute a source revision, and append an event and its materialized records in one SQLite transaction. The external JSON log anchor advances after the database commit. Reads reconstruct effective claim statuses from append-only transitions. Search prefers FTS5 and falls back to SQL candidate filtering plus whole-term matching.
+Portable ledger writes validate the actor and references, redact recognized secret patterns, compute a source revision, and append an event and its materialized records in one SQLite transaction. The external JSON log anchor advances after the database commit. Reads reconstruct effective claim statuses from append-only transitions. Search prefers FTS5 and falls back to SQL candidate filtering plus whole-term matching.
 
 ## Fixes and regression coverage
 
-Each behavioral defect below was reproduced with a failing regression test before its fix.
+The November 15, 2026 review reproduced each defect below with a failing regression test before its fix.
 
 | Defect | Result after the change |
 | --- | --- |
@@ -48,9 +49,15 @@ Each behavioral defect below was reproduced with a failing regression test befor
 
 The subprocess transport is now independently testable in `openclaw/bridge.js`. Node tests exercise real Python bridge calls and validate the npm package contents. Packaging includes the extracted bridge module and documentation referenced by the README. `.gitignore` now covers the current `.octance/` state directory as well as legacy state.
 
-## Validation
+## Validation of the native repair workflow
 
-Local environment: Python 3.12.3, Node.js 26.13.0. No live OpenClaw Gateway or Docker container was started.
+All seven jobs passed on the updated repair branch, including the portable skill on Python 3.9, the full suite on Python 3.11, 3.12, and 3.14, the optional parser, the Node bridge and package, and the Docker experiment. The Python 3.9 job uses Ubuntu 24.04 so setup can install that interpreter. [GitHub Actions run](https://github.com/tempothrone-star/Octane/actions/runs/44094502795)
+
+The Docker fixture resumes an investigation with its saved evidence, follows the runtime call path, and rejects a patch that changes a documented sentinel. It validates the smaller candidate against the same failing reproduction and a separate passing preservation check. The tests also exercise output comparison for deterministic checks. [Native demonstration](openclaw.md#reproduce-the-native-demonstration)
+
+## November 15, 2026 local review
+
+This earlier review used Python 3.12.3 and Node.js 26.13.0 for CLI and bridge checks.
 
 - Standard-library suite: `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -q` — 71 tests, OK; one skip because the optional parser is absent.
 - Isolated virtual environment installed with `pip install '.[ast]'`: 73 tests, OK; two expected skips for dependency-absence cases. Actual Tree-sitter parsing tests ran.
@@ -59,15 +66,13 @@ Local environment: Python 3.12.3, Node.js 26.13.0. No live OpenClaw Gateway or D
 - A copied skill directory, outside the repository and without repository `PYTHONPATH`, successfully ran init, evidence, claim, dependency graph, verify-log, and replay comparison.
 - The three-case synthetic localization benchmark still reports ranked top-1/MRR of 1.00/1.00. Its format-aware traceback baseline also scores 1.00/1.00; recent-change scores 0.00/0.00. This is a mechanics check and demonstrates no improvement over the traceback baseline.
 
-The added GitHub Actions workflow covers portable Python 3.9, full Python 3.11/3.12/3.14, the optional parser on Python 3.12, and Node bridge/package checks. Remote CI has not been run from this review; only the local checks above are claimed as executed.
-
 ## Remaining limits and next priorities
 
-1. **Keep the phase gate explicit.** Static dependency edges and trace scores do not prove runtime reachability or root cause. A representative dataset and replayable check design must precede claims of diagnostic quality or new continuity features.
+1. **Measure accuracy on representative defects.** Static dependency edges guide investigation. Use independent expected behavior and matched checks to evaluate localization and repair on real projects.
 2. **Measure large-ledger behavior.** Each write computes a project revision and verifies the event history. Startup maintains search indexes; fallback search can inspect more rows than the returned result limit. These costs deserve measurement before optimization or scale claims.
 3. **Define briefing budgets precisely.** The current estimate covers selected claim records, not the full serialized CLI response. Task text, the response envelope, duplicated unknowns, and pretty-print whitespace can exceed the advertised estimate. This review documents the existing contract rather than silently changing output behavior.
 4. **Keep filesystem guarantees modest.** The comparison fix blocks the reproduced directory-symlink case. Path checks are not an OS security boundary or a complete defense against concurrent filesystem replacement. Source scans are best-effort snapshots and can race with edits.
-5. **Exercise deployed integrations.** Bridge and package tests do not replace live Gateway registration, Windows/macOS validation, or Docker timeout/cleanup tests. The optional grammar bundle was exercised on Linux/Python 3.12 only.
+5. **Exercise deployed integrations.** The current matrix covers Linux. Gateway policies, operating system differences, parser wheels, and Docker cleanup warrant separate coverage as deployment support expands.
 6. **Consolidate schema evolution deliberately.** The portable ledger has one numbered migration plus additive startup compatibility logic; the PIL has its own migrations. Future changes should preserve existing stores and keep their migration paths distinct.
 
 ## Primary references checked

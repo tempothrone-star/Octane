@@ -1,6 +1,6 @@
-# Phase 1: claims and evidence
+# Portable Octance claims and evidence
 
-Octance stores observations as immutable evidence and interpretations as separate claims. Evidence uses one of the CLI's listed types, has a content hash, agent, UTC timestamp, project revision, method, verification status, and optional relative file/symbol/line metadata. Phase 1 always records evidence as `unverified`; merely naming a record `test_result` or `runtime_trace` does not prove it ran.
+Octance stores observations as immutable evidence and interpretations as separate claims. Evidence carries a type, content hash, agent, UTC timestamp, project revision, method, verification status, and optional relative file, symbol, and line metadata. The portable CLI records evidence as `unverified`, including records with a `test_result` or `runtime_trace` type.
 
 Supported claim kinds are `observation`, `inference`, `hypothesis`, `intent`, `decision`, `requirement`, `limitation`, and `open_question`. Claims cite evidence IDs where relevant, may cite contradicting evidence or dependent claims, and have no numeric confidence score. Claim text is immutable, while status changes are recorded through append-only events; for example, `claim status CL-0001 --status needs_review`. Add a new claim and an explicit link to correct or qualify earlier claim content.
 
@@ -16,4 +16,4 @@ python3 "{baseDir}/scripts/octance.py" claim add \
   --evidence EV-0001
 ```
 
-The `evidence_basis` field is ordinal, derived from linked record types, and is not a probability. Phase 1 has no replayable check or route to `verified`; report tests and runtime observations separately in conversation until check replay is implemented.
+The `evidence_basis` field expresses an ordered assessment derived from linked record types. Report the actual tests and runtime observations separately, including the behavior the checks exercised.

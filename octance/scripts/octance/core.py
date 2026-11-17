@@ -108,6 +108,19 @@ def _atomic_json(path: Path, data: Any) -> None:
             pass
 
 
+def _read_json_object(path: Path) -> Dict[str, Any]:
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError(path.name + " must contain a JSON object")
+    return value
+
+
+def _valid_config(config: Any) -> bool:
+    return (isinstance(config, dict) and type(config.get("schema")) is int
+            and config["schema"] == 1 and config.get("default_trust_tier") in ("low", "standard")
+            and isinstance(config.get("execution_allowlist"), list))
+
+
 def revision_for(root: Path) -> str:
     digest = hashlib.sha256()
     for current, dirs, files in os.walk(str(root), followlinks=False):
@@ -272,10 +285,10 @@ class Ledger:
                 raise OctanceError("refusing to append to a damaged event log: " + integrity.get("reason", "integrity failure"), 1, "integrity_error")
         request_json = canonical(request)
         key = explicit_key or _digest({"agent_id": agent_id, "op": op, "request": request})
-        old = conn.execute("SELECT op,payload_json FROM event_log WHERE idempotency_key=?", (key,)).fetchone()
+        old = conn.execute("SELECT agent_id,op,payload_json FROM event_log WHERE idempotency_key=?", (key,)).fetchone()
         if old:
             envelope = json.loads(old["payload_json"])
-            if old["op"] != op or envelope["request_json"] != request_json:
+            if old["agent_id"] != agent_id or old["op"] != op or envelope["request_json"] != request_json:
                 raise OctanceError("idempotency key was already used with different content", 2, "idempotency_conflict")
             return envelope["record"]
         record = builder(conn, utc_now())
@@ -332,6 +345,22 @@ class Ledger:
     def verify_log(self, project_id: str) -> Dict[str, Any]:
         conn = self.connect()
         try:
+            # Read the external anchor before the database snapshot. A writer
+            # commits SQLite before advancing the anchor, so this ordering can
+            # observe a valid older prefix, never an anchor newer than the rows.
+            metadata_path = self.db_path.parent / "project.json"
+            anchor_seq = None
+            anchor_hash = None
+            if metadata_path.exists():
+                try:
+                    anchor = _read_json_object(metadata_path).get("log_anchor", {})
+                    if not isinstance(anchor, dict):
+                        raise ValueError("log_anchor must be an object")
+                    anchor_seq, anchor_hash = anchor.get("seq"), anchor.get("hash")
+                except (OSError, ValueError, TypeError):
+                    return {"valid": False, "first_bad_seq": None, "reason": "project log anchor unreadable"}
+                if type(anchor_seq) is not int or anchor_seq < 1 or not isinstance(anchor_hash, str):
+                    return {"valid": False, "first_bad_seq": None, "reason": "project log anchor missing"}
             rows = conn.execute("SELECT * FROM event_log ORDER BY seq").fetchall()
             previous = ZERO_HASH
             for index, row in enumerate(rows, 1):
@@ -348,15 +377,7 @@ class Ledger:
                 if actual != row["hash"]:
                     return {"valid": False, "first_bad_seq": index, "reason": "event hash mismatch"}
                 previous = row["hash"]
-            metadata_path = self.db_path.parent / "project.json"
-            if metadata_path.exists():
-                try:
-                    anchor = json.loads(metadata_path.read_text(encoding="utf-8")).get("log_anchor", {})
-                    anchor_seq, anchor_hash = int(anchor.get("seq", -1)), anchor.get("hash")
-                except (OSError, ValueError, TypeError):
-                    return {"valid": False, "first_bad_seq": None, "reason": "project log anchor unreadable"}
-                if anchor_seq < 1 or not isinstance(anchor_hash, str):
-                    return {"valid": False, "first_bad_seq": None, "reason": "project log anchor missing"}
+            if anchor_seq is not None:
                 if anchor_seq > len(rows):
                     return {"valid": False, "first_bad_seq": anchor_seq, "reason": "event log truncated below anchor"}
                 if rows[anchor_seq - 1]["hash"] != anchor_hash:
@@ -387,6 +408,9 @@ class Ledger:
         expected: Dict[str, Any] = {"projects": [], "agents": [], "evidence": [], "evidence_links": [], "claims": [], "claim_links": [], "claim_status_events": [], "counters": {}}
         conn = self.connect()
         try:
+            # Event replay and all materialized tables must share one WAL read
+            # snapshot while other processes continue to append observations.
+            conn.execute("BEGIN")
             rows = conn.execute("SELECT * FROM event_log ORDER BY seq").fetchall()
             for row in rows:
                 record = json.loads(row["payload_json"])["record"]
@@ -451,11 +475,11 @@ def init_project(root: Path, update_gitignore: bool = False, trust_tier: str = "
         metadata_path = state / "project.json"
         if metadata_path.exists():
             try:
-                metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                metadata = _read_json_object(metadata_path)
             except (OSError, ValueError) as error:
                 raise OctanceError("project.json is unreadable: " + str(error))
-            if metadata.get("project_id") != project_id:
-                raise OctanceError("project.json project_id does not match database", 1, "project_mismatch")
+            if metadata.get("project_id") != project_id or metadata.get("root") != str(root):
+                raise OctanceError("project.json project_id/root does not match database", 1, "project_mismatch")
     else:
         if trust_tier not in {"low", "standard"}:
             raise OctanceError("default trust tier must be low or standard", 2, "invalid_input")
@@ -509,8 +533,10 @@ class Project:
         self.root = root.resolve()
         self.state = self.root / ".octance"
         try:
-            self.metadata = json.loads((self.state / "project.json").read_text(encoding="utf-8"))
-            self.config = json.loads((self.state / "config.json").read_text(encoding="utf-8"))
+            self.metadata = _read_json_object(self.state / "project.json")
+            self.config = _read_json_object(self.state / "config.json")
+            if not _valid_config(self.config):
+                raise ValueError("config.json requires schema 1, a low/standard trust tier, and an execution_allowlist array")
         except (OSError, ValueError) as error:
             raise OctanceError("project metadata/config is missing or invalid: " + str(error))
         if self.metadata.get("root") != str(self.root):
@@ -711,9 +737,23 @@ class Project:
             row = conn.execute("SELECT * FROM claims WHERE claim_id=? AND project_id=?", (claim_id, self.project_id)).fetchone()
             if not row:
                 raise OctanceError("unknown claim", 2, "not_found")
+            if explicit_key:
+                old = conn.execute("SELECT agent_id,op,payload_json FROM event_log WHERE idempotency_key=?",
+                                   (explicit_key,)).fetchone()
+                if old:
+                    integrity = self.ledger.verify_log(self.project_id)
+                    if not integrity["valid"]:
+                        raise OctanceError("refusing retry against a damaged event log", 1, "integrity_error")
+                    envelope = json.loads(old["payload_json"])
+                    original = json.loads(envelope["request_json"])
+                    if (old["agent_id"] != actor_id or old["op"] != "claim.status"
+                            or original.get("claim_id") != claim_id or original.get("status") != status):
+                        raise OctanceError("idempotency key was already used with different content", 2, "idempotency_conflict")
+                    conn.commit()
+                    return envelope["record"]
             previous = conn.execute("SELECT id,previous_status,status,agent_id,created_at FROM claim_status_events WHERE claim_id=? ORDER BY id DESC LIMIT 1", (claim_id,)).fetchone()
             previous_status = previous["status"] if previous else row["status"]
-            if previous_status == status and previous:
+            if previous_status == status and previous and not explicit_key:
                 conn.commit()
                 return {"claim_id": claim_id, "previous_status": previous["previous_status"], "status": status,
                         "agent_id": previous["agent_id"], "created_at": previous["created_at"]}
@@ -803,7 +843,9 @@ class Project:
                 params.extend(["%" + token + "%"] * 4)
         rows = self._rows("SELECT * FROM evidence WHERE " + " AND ".join(clauses) + " ORDER BY rowid DESC" + (" LIMIT ?" if not fallback_tokens else ""), params + ([limit] if not fallback_tokens else []))
         if fallback_tokens:
-            rows = [row for row in rows if set(fallback_tokens) <= set(re.findall(r"[A-Za-z0-9]+", " ".join(str(row.get(k) or "") for k in ("description", "payload_json", "file", "symbol")).casefold()))]
+            rows = [row for row in rows if set(fallback_tokens) <= set(re.findall(r"[A-Za-z0-9]+", (
+                " ".join(str(row.get(k) or "") for k in ("description", "file", "symbol"))
+                + " " + canonical(row["payload"])).casefold()))]
         return rows[:limit]
 
     def _attach_claim_details(self, claims: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -932,12 +974,12 @@ def diagnose_project(root: Path) -> Dict[str, Any]:
     root = root.resolve(); state = root / ".octance"; warnings: List[str] = []
     metadata: Dict[str, Any] = {}; project_id = None; config_valid = False
     try:
-        metadata = json.loads((state / "project.json").read_text(encoding="utf-8")); project_id = metadata.get("project_id")
+        metadata = _read_json_object(state / "project.json"); project_id = metadata.get("project_id")
         if metadata.get("root") != str(root): warnings.append("stored project root does not match current directory")
     except (OSError, ValueError, AttributeError) as error: warnings.append("project metadata is invalid: " + str(error))
     try:
-        config = json.loads((state / "config.json").read_text(encoding="utf-8"))
-        config_valid = isinstance(config, dict) and config.get("schema") == 1 and config.get("default_trust_tier") in {"low", "standard"} and isinstance(config.get("execution_allowlist"), list)
+        config = _read_json_object(state / "config.json")
+        config_valid = _valid_config(config)
     except (OSError, ValueError) as error: warnings.append("project config is invalid: " + str(error))
     conn = None; schema = None; journal = None; fts = False; db_error = None
     database_path = state / "octance.db"

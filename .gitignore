@@ -4,6 +4,8 @@ node_modules/
 build/
 *.egg-info/
 .octane/
+.octance/
 *.sqlite3
 *.sqlite3-shm
 *.sqlite3-wal
+/api.env

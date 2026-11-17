@@ -141,6 +141,8 @@ def source_inventory(root: Path, max_files: int = 100000, max_file_bytes: int = 
     skipped: Counter[str] = Counter()
     visited = 0
     truncated = False
+    suffixes = [(suffix.lower(), LANGUAGES[suffix])
+                for suffix in sorted(LANGUAGES, key=lambda suffix: (-len(suffix), suffix))]
     for current, dirs, names in os.walk(str(root), topdown=True, followlinks=False):
         base = Path(current)
         dirs[:] = sorted(d for d in dirs if d not in EXCLUDED_DIRS and not (base / d).is_symlink())
@@ -155,10 +157,8 @@ def source_inventory(root: Path, max_files: int = 100000, max_file_bytes: int = 
             if visited > max_files:
                 truncated = True
                 break
-            language = LANGUAGES.get(path.suffix.lower())
-            # .R and .m are case-sensitive in some ecosystems; retain the explicit map.
-            if path.suffix in LANGUAGES:
-                language = LANGUAGES[path.suffix]
+            lower_name = name.lower()
+            language = next((language for suffix, language in suffixes if lower_name.endswith(suffix)), None)
             if language is None:
                 if path.suffix:
                     unsupported[path.suffix.lower()] += 1
@@ -261,18 +261,17 @@ def recent_project_changes(root: Path, limit: int = 5) -> Tuple[List[str], Optio
         prefix = root.relative_to(git_root).as_posix()
         prefix = "" if prefix == "." else prefix.rstrip("/") + "/"
         commands = [
-            ["git", "-C", str(git_root), "log", "-n", str(limit), "--format=", "--name-only", "--diff-filter=ACMR"],
-            ["git", "-C", str(git_root), "diff", "--name-only", "HEAD"],
-            ["git", "-C", str(git_root), "diff", "--cached", "--name-only"],
+            ["git", "-C", str(git_root), "log", "-n", str(limit), "--format=", "--name-only", "-z", "--diff-filter=ACMR"],
+            ["git", "-C", str(git_root), "diff", "--name-only", "-z", "HEAD"],
+            ["git", "-C", str(git_root), "diff", "--cached", "--name-only", "-z"],
         ]
         ordered: List[str] = []
         seen = set()
         for command in commands:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=3, check=False)
+            result = subprocess.run(command, capture_output=True, timeout=3, check=False)
             if result.returncode:
                 continue
-            for raw in result.stdout.splitlines():
-                raw = raw.strip().replace("\\", "/")
+            for raw in result.stdout.decode("utf-8", "surrogateescape").split("\0"):
                 if not raw or (prefix and not raw.startswith(prefix)):
                     continue
                 rel = raw[len(prefix):] if prefix else raw
@@ -283,7 +282,6 @@ def recent_project_changes(root: Path, limit: int = 5) -> Tuple[List[str], Optio
                                 capture_output=True, timeout=3, check=False)
         if result.returncode == 0:
             for raw in result.stdout.decode("utf-8", "surrogateescape").split("\0"):
-                raw = raw.replace("\\", "/")
                 if not raw or (prefix and not raw.startswith(prefix)):
                     continue
                 rel = raw[len(prefix):] if prefix else raw

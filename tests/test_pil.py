@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import tempfile
 import threading
@@ -46,7 +47,7 @@ class PILTests(unittest.TestCase):
             connection.execute("INSERT INTO schema_migrations VALUES(1,'2025-01-01T00:00:00+00:00')")
         upgraded = ProjectIntelligence(path)
         with upgraded._session() as connection:
-            self.assertEqual([row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4])
+            self.assertEqual([row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5])
             columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
             self.assertIn("last_indexed_at", columns)
             investigation_columns = {row[1] for row in connection.execute("PRAGMA table_info(investigations)")}
@@ -67,7 +68,7 @@ class PILTests(unittest.TestCase):
         for thread in threads: thread.join()
         self.assertEqual(errors, [])
         with ProjectIntelligence(concurrent_path)._session() as connection:
-            self.assertEqual(connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 4)
+            self.assertEqual(connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 5)
 
     def test_investigation_lifecycle_and_audit_terminal_state(self):
         agent = self.database.register_agent(self.project["id"], "owner", "investigator",
@@ -313,6 +314,32 @@ class PILTests(unittest.TestCase):
         self.assertEqual(file.read_text(encoding="utf-8"), "value = 1\n")
         with self.assertRaises(ValueError):
             workspace_manager.apply_candidate_patch(experimental["id"], "../escape", "bad")
+
+    def test_workspace_comparison_does_not_read_through_replaced_directories(self):
+        (self.root / "nested").mkdir()
+        (self.root / "nested/sample.py").write_text("original = 1\n")
+        external = self.base / "external"
+        external.mkdir()
+        (external / "sample.py").write_text("outside_private_content = 2\n")
+        manager = WorkspaceManager(self.database, self.base / "snapshots")
+        for side in ("workspace", "original"):
+            with self.subTest(side=side):
+                workspace = manager.create_workspace(self.project["id"], "experimentation")
+                target = (Path(workspace["path"]) if side == "workspace" else self.root) / "nested"
+                shutil.rmtree(target)
+                target.symlink_to(external, target_is_directory=True)
+                try:
+                    comparison = manager.compare_workspace(workspace["id"])
+                    self.assertNotIn("outside_private_content", json.dumps(comparison))
+                    if side == "workspace":
+                        self.assertTrue(any(item["kind"] == "symlink" for item in comparison["differences"]))
+                    else:
+                        self.assertTrue(comparison["original_changed"])
+                        self.assertEqual(comparison["differences"], [])
+                finally:
+                    target.unlink()
+                    target.mkdir()
+                    (target / "sample.py").write_text("original = 1\n")
 
     def test_three_agent_demo_persists_handover_and_revision_staleness(self):
         report = run_demo(ProjectIntelligence(self.base / "demo.sqlite3"))

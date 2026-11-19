@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .db import ProjectIntelligence
 from .exploration import ExplorationProfile, PythonAdapter, Tentacle
+from .scanner import ProjectScanner
 
 
 def main() -> None:
@@ -16,7 +17,7 @@ def main() -> None:
     init.add_argument("root", type=Path)
     init.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
     init.add_argument("--name")
-    scan = commands.add_parser("scan", help="scan Python files and update the project graph")
+    scan = commands.add_parser("scan", help="scan source files and update the multilingual project graph")
     scan.add_argument("project_id")
     scan.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
     demo = commands.add_parser("demo", help="run a disposable database and source-analysis demonstration")
@@ -37,7 +38,7 @@ def main() -> None:
         project = intelligence.get_project(args.project_id)
         if project is None:
             parser.error(f"unknown project: {args.project_id}")
-        print(json.dumps(PythonAdapter().scan(intelligence, args.project_id, project["root"]), indent=2))
+        print(json.dumps(ProjectScanner().scan(intelligence, args.project_id), indent=2))
     else:
         print(json.dumps(run_demo(intelligence), indent=2))
 

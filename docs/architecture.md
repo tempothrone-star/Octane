@@ -1,11 +1,11 @@
 # Project architecture
 
-Octane and Octance have distinct entry points and SQLite stores. The OpenClaw agent supplies reasoning for both.
+Octane is one OpenClaw plugin and skill backed by a Python package. Its tools and CLI share the source analyzer. The OpenClaw agent supplies reasoning.
 
 | Component | Entry point | State |
 | --- | --- | --- |
-| Native Octane plugin | `openclaw/index.js` registers tools and `openclaw/bridge.js` invokes the Python 3.11+ bridge | A Gateway-side Project Intelligence Layer (PIL) database and disposable workspaces |
-| Portable Octance skill | `octance/SKILL.md` and the bundled Python 3.9+ CLI | A project-local `.octance/` ledger |
+| OpenClaw tools | `openclaw/index.js` registers tools and `openclaw/bridge.js` invokes the Python 3.11+ bridge | A Gateway-side Project Intelligence Layer (PIL) database and disposable workspaces |
+| Local evidence CLI | `scripts/octane.py` and `octane/ledger/` | A project-local `.octane/` ledger |
 
 ## Native project intelligence
 
@@ -18,19 +18,19 @@ The Gateway supplies agent identity and tool permissions. Configure allowed chec
 
 ## Portable ledger
 
-The skill directory contains `SKILL.md`, a self-contained `scripts/` implementation, and numbered SQL migrations. `scripts/octance.py` at the repository root is a development convenience wrapper that invokes the bundled skill CLI.
+The root `SKILL.md` describes the repair workflow and CLI fallback. `scripts/octane.py`, `python -m octane`, and the installed `octane` command use one dispatcher. Local evidence commands use `octane/ledger/`, which also provides the source and dependency analyzer used by native scans. `octane native` exposes Gateway database commands.
 
 ## Project layout and identity
 
-Each analyzed root stores runtime state under `.octance/`:
+Each analyzed root stores runtime state under `.octane/`:
 
-- `octance.db`: SQLite WAL database, schema version 1.
+- `ledger.db`: SQLite WAL database, schema version 1.
 - `project.json`: project UUID, canonical root, and a last-committed log-head anchor.
 - `config.json`: default trust tier and an initially empty execution allowlist reserved for later phases.
 
 Initialization starts from the requested directory or the current working directory and uses the enclosing Git top-level when available. Ledger commands discover the nearest initialized project and check the canonical path and project UUID before reading or writing records. Static `languages`, `graph`, and `locate` commands also work on a checkout without an initialized ledger. Pass `init --update-gitignore` to add the state directory to `.gitignore`. Tests initialize temporary roots.
 
-The revision recorded with evidence and claims is a SHA-256 digest of relative file paths and file bytes, excluding symlinks, `.git`, `.octance`, and common generated/cache directories. Hashing does not copy file contents into the database. Git is optional.
+The revision recorded with evidence and claims is a SHA-256 digest of relative file paths and file bytes, excluding symlinks, `.git`, `.octane`, and common generated/cache directories. Hashing does not copy file contents into the database. Git is optional.
 
 ## Append-only ledger
 
@@ -69,3 +69,7 @@ A three-case synthetic benchmark in `tests/benchmark_localization.py` reports to
 ## Portable scope
 
 The portable CLI supports ledger operations and static file-level triage. Reopen source and rerun relevant checks before relying on old claims. Native investigation checkpoints, runtime traces, and patch proposals use the separate PIL store. The portable ledger has one numbered migration, with compatibility tables and full-text indexes managed at startup.
+
+## Compatibility
+
+New local ledgers use `.octane/ledger.db`. Existing `.octance/octance.db` records are opened in place, preserving project identity, idempotency keys, and the anchored event history. If both ledger locations exist, the CLI reports `project_conflict`. The former script filename and agent environment variable remain aliases for existing integrations.

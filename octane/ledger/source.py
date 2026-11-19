@@ -97,7 +97,7 @@ def register_language(language: str, extensions: Iterable[str], *,
     }
 
 EXCLUDED_DIRS = {
-    ".git", ".octance", ".hg", ".svn", ".venv", "venv", "env", "__pycache__", ".tox",
+    ".git", ".octane", ".octance", ".hg", ".svn", ".venv", "venv", "env", "__pycache__", ".tox",
     "node_modules", "vendor", "target", "dist", "build", "coverage", ".next", ".nuxt",
     ".svelte-kit", "out", "bin", "obj", "Pods", "DerivedData", "third_party", "third-party",
 }
@@ -397,7 +397,7 @@ def locate_suspects(root: Path, trace_text: str, query: str = "", limit: int = 2
                       "truncated": inventory["truncated"]},
         "warnings": ([warning] if warning else []) + [
             "Ranking is heuristic triage, not a root-cause diagnosis or calibrated confidence.",
-            "Trace data and source files are read only; Octance does not run project code or modify source.",
+            "Trace data and source files are read only; Octane does not run project code or modify source.",
             "Only extension inventory and common stack-frame formats are supported; framework/vendor mapping is approximate.",
         ],
         "baselines": {

@@ -1,8 +1,8 @@
 # Implementation and limitations
 
-## Portable Octance
+## Local evidence and static analysis
 
-The standalone skill provides a Python 3.9+ standard-library CLI. It records evidence and claims in a project-local SQLite ledger, quarantines low-trust claims, verifies an anchored SHA-256 event chain, and compares materialized state with event replay. Evidence stays `unverified` in this ledger. Run checks with the host's authorized tools and record the observation with its source and revision. See the [portable command reference](../octance/SKILL.md).
+The Octane package includes a Python 3.9+ standard-library CLI under `octane/ledger/`. It records evidence and claims in a project-local SQLite ledger, quarantines low-trust claims, verifies an anchored SHA-256 event chain, and compares materialized state with event replay. Evidence stays `unverified` in this ledger. Run checks with the host's authorized tools and record the observation with its source and revision. See the [portable command reference](../SKILL.md).
 
 | Command | What it reports |
 | --- | --- |
@@ -13,7 +13,7 @@ The standalone skill provides a Python 3.9+ standard-library CLI. It records evi
 
 Revision hashing can be expensive on large trees. SQLite WAL expects local storage. The hash chain and local anchor detect alterations under the CLI's integrity model. Shell or database access can modify both. Keep credentials out of descriptions and evidence payloads.
 
-## Native Octane
+## OpenClaw investigation tools
 
 The OpenClaw plugin adds checkout triage, candidate function relationships, runtime traces for specific probes, and a separate SQLite store for revision-aware investigations. A scan reports parser and budget gaps. A saved checkpoint carries its project revision, evidence references, and exploration position. Scan and revalidate before reusing a checkpoint after the checkout changes. See the [native workflow](openclaw.md).
 
@@ -32,7 +32,7 @@ The three authored Python, TypeScript, and Go cases test file-ranking mechanics.
 
 | Ranker | Top-1 | Mean reciprocal rank |
 | --- | ---: | ---: |
-| Octance heuristic | 1.00 | 1.00 |
+| Octane heuristic | 1.00 | 1.00 |
 | Traceback-first | 1.00 | 1.00 |
 | Recent-change-first | 0.00 | 0.00 |
 

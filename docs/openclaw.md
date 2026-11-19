@@ -1,6 +1,6 @@
 # Native Octane integration
 
-Octane gives OpenClaw agents a shared SQLite Project Intelligence Layer (PIL). It stores evidence, interpretations, an evolving graph, investigation checkpoints, and controlled execution records. The OpenClaw agent remains responsible for planning, evaluating evidence, and interpreting results. The separately installable `octance` skill retains its portable ledger and its own database.
+Octane gives OpenClaw agents a shared SQLite Project Intelligence Layer (PIL). It stores evidence, interpretations, an evolving graph, investigation checkpoints, and controlled execution records. The OpenClaw agent remains responsible for planning, evaluating evidence, and interpreting results. The root `octane` skill also documents local evidence and static analysis through `scripts/octane.py`.
 
 The [installation guide](../openclaw/README.md) shows the native plugin configuration. From an allowed checkout, ask OpenClaw “Fix a bug.” Use `/skill octane Fix a bug.` to invoke the workflow explicitly.
 
@@ -51,7 +51,7 @@ Set `pythonTrace: true` on a Docker workspace run such as `["python", "-B", "-m"
 ## Architecture and limits
 
 - `openclaw/index.js` registers the optional tools using OpenClaw's [tool factory API](https://docs.openclaw.ai/plugins/building-plugins). It passes runtime agent IDs from the host context to the bridge. A model-supplied parameter cannot choose the runtime identity. Attribution identifies the OpenClaw agent and a permission-scoped bridge actor when available. Explicit OpenClaw tool policy remains the authorization boundary.
-- `octane/scanner.py` reuses the bundled portable parser. It persists multilingual file dependencies, Python call candidates resolved from lexical scopes and imports, and syntax-level function and call candidates for the supported Tree-sitter grammars when the optional backend is installed. Run an explicit scan after upgrading to rebuild saved graph edges with the new resolver.
+- `octane/scanner.py` uses the shared `octane/ledger/` parser. It persists multilingual file dependencies, Python call candidates resolved from lexical scopes and imports, and syntax-level function and call candidates for the supported Tree-sitter grammars when the optional backend is installed. Run an explicit scan after upgrading to rebuild saved graph edges with the new resolver.
 - `octane/investigation.py` stores exploration frontier and evidence atomically, and `octane/db.py` migrates the existing PIL database to schema 5. Existing evidence, checkpoints, and graph history are retained.
 - `octane/workspace.py` copies an approved project, excludes common credential paths, and keeps an unmounted baseline. Docker receives only the disposable copy, the selected local image, and an explicit command. The container has networking disabled, resource limits, and a timeout. Keep credentials outside the source tree. The Docker daemon and approved images are trusted infrastructure.
 - Native evidence verification requires a separate recorded passing run on an unchanged snapshot at the current indexed revision. A passing command establishes the behavior it actually checked. Octane leaves semantic interpretation to the investigator.

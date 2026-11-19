@@ -1,15 +1,15 @@
 # Project review
 
-The portable Octance ledger keeps observations, claims, and auditable events in the project. The native Octane plugin adds project intelligence, saved investigations, and controlled Docker execution in a separate store. Validate changes through the entry point that owns the behavior and through both paths when they share code.
+Octane combines local evidence, source analysis, saved investigations, and Docker validation in one plugin. The root skill is the single workflow entry point. Source analysis is shared by the CLI and OpenClaw tools.
 
 ## Component map
 
 | Component | Responsibilities | State and boundaries |
 | --- | --- | --- |
-| `octance/SKILL.md`, root `SKILL.md` | Host-agent workflow and capability limits | Two path-adjusted copies; a contract test checks consistency |
-| `scripts/octance.py` | Repository convenience entry point | Imports the portable implementation |
-| `octance/scripts/octance/cli.py` | Argument validation, identity/permission checks, JSON responses | The standalone skill needs Python 3.9+ and no third-party packages |
-| `octance/scripts/octance/core.py` | Project identity, evidence, claims, search, event reducers, integrity, briefings | `.octance/octance.db`, `project.json`, and `config.json` per project |
+| `SKILL.md` | Host-agent workflow and capability limits | One skill registered by the plugin manifest |
+| `scripts/octane.py`, `octane/__main__.py` | Command dispatch | Local evidence commands and native database commands |
+| `octane/ledger/cli.py` | Argument validation, identity/permission checks, JSON responses | Local commands support Python 3.9+ with the standard library |
+| `octane/ledger/core.py` | Project identity, evidence, claims, search, event reducers, integrity, briefings | `.octane/ledger.db`, `project.json`, and `config.json` per project |
 | `source.py`, `polygraph.py`, `ast_backend.py` | Extension inventory, trace ranking, dependency extraction, optional Tree-sitter parsing | Read-only heuristics; do not execute analyzed code or establish causation |
 | `openclaw/index.js`, `openclaw/bridge.js` | Register 12 optional native tools and transport JSON to Python | Operator-configured project roots; subprocess size and timeout limits |
 | `octane/openclaw_bridge.py`, `octane/db.py` | Native tool dispatch and Project Intelligence Layer | Gateway-side, operator-configured SQLite database |
@@ -18,11 +18,13 @@ The portable Octance ledger keeps observations, claims, and auditable events in 
 
 ```mermaid
 flowchart LR
-    Agent[Host agent] --> Skill[Portable skill CLI]
-    Skill --> Ledger[Project-local Octance ledger]
-    Skill --> Triage[Static inventory / graph / trace ranking]
-    Agent --> Plugin[Optional OpenClaw tools]
+    Agent[Host agent] --> Skill[Octane skill]
+    Skill --> CLI[Local CLI]
+    CLI --> Ledger[Project-local evidence ledger]
+    CLI --> Analyzer[Shared source analyzer]
+    Skill --> Plugin[OpenClaw tools]
     Plugin --> Bridge[JavaScript / Python JSON bridge]
+    Bridge --> Analyzer
     Bridge --> PIL[Native PIL database]
     Bridge --> Workspace[Disposable workspace manager]
     Workspace --> Docker[Explicit Docker execution]
@@ -47,7 +49,17 @@ The November 15, 2026 review reproduced each defect below with a failing regress
 | Workspace comparison followed a directory replaced by a symlink | Every path component is checked before reading either counterpart; the difference is reported as a symlink |
 | JavaScript tested `workspace.` but operation names use `workspace_run` | A 300-second run receives a 310-second bridge deadline, including cleanup time |
 
-The subprocess transport is now independently testable in `openclaw/bridge.js`. Node tests exercise real Python bridge calls and validate the npm package contents. Packaging includes the extracted bridge module and documentation referenced by the README. `.gitignore` now covers the current `.octance/` state directory as well as legacy state.
+The subprocess transport is now independently testable in `openclaw/bridge.js`. Node tests exercise real Python bridge calls and validate the npm package contents. Packaging includes the extracted bridge module and documentation referenced by the README. `.gitignore` now covers the current `.octane/` state directory and the previous spelling for compatibility.
+
+## Unified Octane package
+
+The plugin manifest loads one root skill named `octane`. The former skill implementation now lives in `octane/ledger/`, and the CLI and OpenClaw tools import the same source analyzer. The installed `octane` command and `scripts/octane.py` dispatch local evidence commands and native database commands.
+
+OpenClaw 2026.11.3 loaded all twelve plugin tools and discovered one eligible Octane skill using an isolated configuration. The installed Python wheel ran ledger initialization and a native scan of a JavaScript project. Package checks require one `SKILL.md` and the shared analyzer and migrations.
+
+Upgrade validation opened a ledger created by the previous committed CLI and preserved its project ID, evidence, claim, and every event row. Compatibility tests cover the previous script filename, agent environment variable, existing state directories, and conflicts between two ledger locations.
+
+Local validation ran 101 Python tests with the optional parser and Docker enabled, with two expected skips. All 46 local CLI tests passed on Python 3.9. All three Node tests passed, including the package-content check.
 
 ## Validation of the native repair workflow
 

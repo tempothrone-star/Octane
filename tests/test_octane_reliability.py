@@ -11,9 +11,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "octance/scripts"))
-from octance.core import Ledger, OctanceError, Project, init_project
-from octance.source import LANGUAGES, LANGUAGE_IMPORT_SYNTAX, recent_project_changes, register_language, source_inventory
+sys.path.insert(0, str(ROOT))
+from octane.ledger.core import Ledger, OctaneError, Project, init_project
+from octane.ledger.source import LANGUAGES, LANGUAGE_IMPORT_SYNTAX, recent_project_changes, register_language, source_inventory
 
 
 class ReliabilityTests(unittest.TestCase):
@@ -25,9 +25,9 @@ class ReliabilityTests(unittest.TestCase):
         self.project = Project(self.root)
 
     def invoke(self, *args):
-        result = subprocess.run([sys.executable, str(ROOT / "scripts/octance.py"), *args],
+        result = subprocess.run([sys.executable, str(ROOT / "scripts/octane.py"), *args],
                                 cwd=self.root, capture_output=True, text=True, timeout=20,
-                                env={**os.environ, "OCTANCE_AGENT": "owner"})
+                                env={**os.environ, "OCTANE_AGENT": "owner"})
         self.assertNotIn("Traceback", result.stderr)
         return result.returncode, json.loads(result.stdout)
 
@@ -48,7 +48,7 @@ class ReliabilityTests(unittest.TestCase):
         project.transition_claim("AG-owner", claim, "needs_review", "second-transition")
         self.assertEqual(project.transition_claim("AG-owner", claim, "stale", "first-transition"), first)
         self.assertEqual(project.get_claim(claim)["status"], "needs_review")
-        with self.assertRaises(OctanceError) as caught:
+        with self.assertRaises(OctaneError) as caught:
             project.transition_claim("AG-owner", claim, "needs_review", "first-transition")
         self.assertEqual(caught.exception.kind, "idempotency_conflict")
         self.assertTrue(project.ledger.rebuild_check(project.project_id)["matches"])
@@ -57,7 +57,7 @@ class ReliabilityTests(unittest.TestCase):
         project = self.project
         other = project.register_agent("other", "explorer", "standard", "AG-owner")["agent_id"]
         project.add_evidence("AG-owner", "source_observation", "same content", {}, explicit_key="shared")
-        with self.assertRaises(OctanceError) as caught:
+        with self.assertRaises(OctaneError) as caught:
             project.add_evidence(other, "source_observation", "same content", {}, explicit_key="shared")
         self.assertEqual(caught.exception.kind, "idempotency_conflict")
 
@@ -65,7 +65,7 @@ class ReliabilityTests(unittest.TestCase):
         for filename, malformed in (("project.json", []), ("config.json", []),
                                     ("config.json", {"schema": 1, "default_trust_tier": [], "execution_allowlist": []})):
             with self.subTest(filename=filename, malformed=malformed):
-                path = self.root / ".octance" / filename
+                path = self.root / ".octane" / filename
                 original = path.read_text()
                 try:
                     path.write_text(json.dumps(malformed))
@@ -77,7 +77,7 @@ class ReliabilityTests(unittest.TestCase):
                     self.assertTrue(doctor["warnings"])
                 finally:
                     path.write_text(original)
-        path = self.root / ".octance/project.json"
+        path = self.root / ".octane/project.json"
         metadata = json.loads(path.read_text())
         metadata["log_anchor"] = []
         path.write_text(json.dumps(metadata))
@@ -119,7 +119,7 @@ class ReliabilityTests(unittest.TestCase):
 
         def read_after_write(path, *args, **kwargs):
             nonlocal appended
-            if path == self.root / ".octance/project.json" and not appended:
+            if path == self.root / ".octane/project.json" and not appended:
                 appended = True
                 self.project.add_evidence("AG-owner", "source_observation", "concurrent write", {})
             return read_text(path, *args, **kwargs)

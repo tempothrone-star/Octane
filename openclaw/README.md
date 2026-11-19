@@ -1,6 +1,6 @@
-# Optional Octane OpenClaw extension
+# Octane OpenClaw plugin
 
-The native extension registers PIL tools for multilingual project indexing, resumable investigations, and Docker experiments. It bundles the native `octane` skill and the separately installable portable `octance` skill.
+Octane registers tools for multilingual project indexing, resumable investigations, and Docker experiments. Its manifest loads one `octane` skill from the repository root. The same package supplies the local evidence CLI.
 
 ## Requirements
 
@@ -18,7 +18,7 @@ npm ci --omit=peer
 openclaw plugins install --link .
 ```
 
-`typebox` is installed by npm. The Gateway supplies OpenClaw itself. The plugin bundles both skills. Invoke the native workflow with `/skill octane Fix a bug.` or `/octane` where direct skill commands are available. [OpenClaw skill commands](https://docs.openclaw.ai/tools/slash-commands#skill-commands)
+`typebox` is installed by npm. The Gateway supplies OpenClaw itself. The plugin loads the root `octane` skill. Invoke the native workflow with `/skill octane Fix a bug.` or `/octane` where direct skill commands are available. [OpenClaw skill commands](https://docs.openclaw.ai/tools/slash-commands#skill-commands)
 
 The following `openclaw.json` excerpt enables a repair workflow with Python Docker experiments. Use an existing absolute checkout path in `allowedProjectRoots`. Choose the exact trusted image needed for the project's checks and pull it onto the Gateway host before running them.
 
@@ -56,7 +56,7 @@ For operators who want the repair guidance available in the initial prompt, Octa
 
 ## Boundaries and validation
 
-The plugin resolves configured absolute `allowedProjectRoots` before calls and independently enforces containment in its Python bridge. Docker execution is denied unless the exact image string appears in `allowedDockerImages`; it has no host-execution fallback. Docker is not a VM boundary. The plugin's PIL engine is separate from Octance's standard-library ledger and project-local `.octance/` database.
+The plugin resolves configured absolute `allowedProjectRoots` before calls and independently enforces containment in its Python bridge. Docker execution is denied unless the exact image string appears in `allowedDockerImages`; it has no host-execution fallback. Docker is not a VM boundary. Gateway investigation records live in the configured PIL database. Local CLI evidence uses `.octane/ledger.db` in the analyzed project. Existing ledgers are reused as described in the [upgrade notes](../README.md#storage-and-upgrades).
 
 Run `openclaw plugins inspect octane --runtime --json` to check registration and `openclaw skills list` to confirm discovery. The [native workflow guide](../docs/openclaw.md) shows the tool calls and the Docker demonstration.
 

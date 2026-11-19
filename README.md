@@ -1,104 +1,96 @@
 # Octane for OpenClaw
 
-Octane is an OpenClaw plugin for investigating and fixing bugs in a source checkout. It finds project test commands, follows candidate caller and callee relationships, and records what ran before and after a patch. The OpenClaw agent uses that evidence to identify the intended behavior and make the smallest correction it can verify.
+Octane helps an OpenClaw agent understand a project, trace behavior through functions and imports, and make small bug fixes supported by tests. It combines source analysis, runtime traces, persistent investigation records, and a local evidence CLI in one plugin and one `octane` skill.
 
-This repository also ships **Octance**, a standalone skill and Python CLI for keeping a project-local evidence ledger and performing static triage.
+Ask **“Fix a bug.”** The workflow finds a baseline check, looks for evidence of intended behavior, reproduces the defect, and follows the affected path before editing. It then reruns the reproduction and checks that neighboring behavior still works. The OpenClaw agent supplies reasoning through its configured model provider.
 
-| Install | Use it for | Requirements |
-| --- | --- | --- |
-| **Octane plugin** | Repair workflows, function graphs, runtime traces, resumable investigations, and evidence-linked patch proposals | OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+. Docker for isolated execution. |
-| **Octance skill** | Evidence, claims, briefings, file dependency maps, and ranking from an existing failure trace | Python 3.9+ and the standard library. OpenClaw is optional when using the CLI directly. |
+## Install
 
-## Install the Octane plugin
+Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on the Gateway host. Docker is used for isolated execution.
 
-From a local checkout of this repository:
+From this checkout:
 
 ```sh
 npm ci --omit=peer
 openclaw plugins install --link .
 ```
 
-Set `plugins.entries.octane.config.allowedProjectRoots` in `openclaw.json` to the absolute directories the plugin may inspect. Allow the relevant `octane_*` tools for the agent. For Docker experiments, allow `octane_workspace`, add the exact trusted image references to `allowedDockerImages`, and pull those images locally. The [plugin setup guide](openclaw/README.md) includes a configuration example and instructions for sandboxed agents.
+Configure `plugins.entries.octane.config.allowedProjectRoots` with the absolute directories Octane may inspect and authorize the relevant tools. For Docker experiments, allow `octane_workspace`, choose trusted images in `allowedDockerImages`, and pull those images locally. Follow the [plugin setup guide](openclaw/README.md) for a complete configuration.
 
-Check registration and skill discovery:
+Check registration and discovery:
 
 ```sh
 openclaw plugins inspect octane --runtime --json
 openclaw skills list
 ```
 
-The plugin bundles both skills. Use the standalone install below if you only need the portable ledger.
-
-## Fix a bug
-
-With OpenClaw working in an allowed checkout, ask **“Fix a bug.”** To invoke the workflow explicitly, use `/skill octane Fix a bug.` OpenClaw can also expose it as `/octane`. [OpenClaw skill commands](https://docs.openclaw.ai/tools/slash-commands#skill-commands)
-
-1. **Get a baseline.** `octane_context` with `triage` identifies relevant tests and their commands from the working copy without running them. When the request gives no symptom and the baseline passes, the skill probes an uncovered case implied by an existing test, document, or caller. If it finds no reproducible failure, it reports what it checked.
-2. **Trace the behavior.** Use `focus` with a path or function name for a bounded Mermaid call graph with source locations. For a wider investigation, use `octane_scan` and `octane_graph` to follow callers, callees, or imports. Run a focused reproduction with runtime tracing where available.
-3. **Preserve what works.** Use existing tests, documentation, or user requirements to establish the intended behavior. Keep the patch small and rerun the same reproduction and separate preservation checks on the candidate.
-4. **Review the evidence.** With `octane_workspace`, a patch proposal pairs a failing baseline reproduction with a passing candidate. Preservation checks must pass on both snapshots. The proposal records the diff, intent evidence, and paired runs. It can flag removed HTTP security-header references and enforce exact output matching for deterministic preservation checks.
-
-The [native workflow guide](docs/openclaw.md) shows how to checkpoint an investigation, resume it after a session change, revalidate evidence, and reproduce the one-line repair demonstration.
-
-### Language and runtime support
-
-- **File and import graphs** recognize extensions across many ecosystems. The portable CLI accepts additional suffixes and import rules in a data-only `.octance/languages.json` via `--language-config`.
-- **Static function graphs** use Python's built-in AST and lexical analysis. Install the optional Tree-sitter extra for syntax-level call candidates in languages such as C, C++, C#, Go, Java, JavaScript, PHP, Ruby, Rust, and TypeScript. Coverage varies by grammar and scan scope. Dynamic dispatch and cross-language calls may need runtime evidence.
-- **Runtime traces** support Python calls and exceptions, Node.js sampling, Ruby method calls, GDB traces for debug binaries, and compatible Speedscope profiles. Each trace covers the selected probe. See the [supported grammars and trace options](openclaw/README.md#multilingual-function-graphs-and-traces) for setup and limits.
-
-To enable Tree-sitter, install the optional extra from the checkout with the same Python environment configured as `pythonExecutable`:
-
-```sh
-python3 -m pip install '.[ast]'
-```
-
-## Use the standalone Octance skill
-
-Install the skill from Git:
+The manifest loads the repository's root [Octane skill](SKILL.md). The same skill can be installed directly when using its command-line tools:
 
 ```sh
 openclaw skills install git:tempothrone-star/Octane
 ```
 
-For a manual workspace install, copy the complete `octance/` directory so its `SKILL.md`, references, and helper script stay together:
+## Investigate and repair
+
+Use `/skill octane Fix a bug.` to invoke the workflow explicitly. OpenClaw can also expose it as `/octane`. [OpenClaw skill commands](https://docs.openclaw.ai/tools/slash-commands#skill-commands)
+
+1. **Establish a baseline.** `octane_context` with `triage` reads project metadata and suggests relevant checks. A request without symptoms starts from the declared test command and a boundary case grounded in existing tests or documentation.
+2. **Follow the affected path.** `focus` accepts a path or function name and returns bounded static relationships, source locations, and a Mermaid plot. Register and scan the project for a broader persistent graph.
+3. **Confirm intended behavior.** Use user requirements, existing tests, documentation, and callers to establish what the program should do. Trace a focused reproduction and record observations separately from hypotheses.
+4. **Validate the smallest correction.** Pair a failing baseline with a passing candidate and separate preservation checks. Review the diff, paired outputs, and recorded intent before applying the patch.
+
+Saved investigations carry evidence references, revision information, and exploration checkpoints across sessions. The [native workflow guide](docs/openclaw.md) shows the tool calls and the Docker repair demonstration.
+
+## Function graphs and runtime traces
+
+- Python analysis uses its built-in AST and lexical scopes. The optional Tree-sitter extra adds syntax-level call candidates across languages including C, C++, C#, Go, Java, JavaScript, PHP, Ruby, Rust, and TypeScript.
+- Runtime probes support Python calls and exception locations, Node.js sampling, Ruby method calls, GDB traces for debug binaries, and compatible Speedscope profiles.
+- File and import graphs cover additional language families. Configure custom suffixes and import forms with a data-only `.octane/languages.json`.
+
+Install the parser extra from this checkout using the interpreter configured as `pythonExecutable`:
 
 ```sh
-mkdir -p "$OPENCLAW_WORKSPACE/skills"
-cp -R ./octance "$OPENCLAW_WORKSPACE/skills/"
+python3 -m pip install '.[ast]'
 ```
 
-Run the bundled CLI with the target checkout as your working directory. Set `OCTANCE_CLI` to the absolute path to `scripts/octance.py` in the Octane checkout or in the installed skill:
+Coverage depends on grammar, scan budget, and the executed input. Use the reported gaps and source evidence when investigating dynamic dispatch or cross-language calls. See the [supported trace options](openclaw/README.md#multilingual-function-graphs-and-traces).
+
+## Command-line tools
+
+Use `python3 scripts/octane.py --help` from this checkout or `python3 -m octane --help`. Installing the Python package also provides the `octane` command. The local ledger and static analysis commands work with Python 3.9+ and the standard library. The packaged native engine and optional parser require Python 3.11+.
+
+To analyze another checkout, set `OCTANE_CLI` to the absolute path of this repository's `scripts/octane.py` and run commands with the target checkout as the working directory.
 
 ```sh
-python3 "$OCTANCE_CLI" init
-python3 "$OCTANCE_CLI" status
-python3 "$OCTANCE_CLI" evidence add \
+python3 "$OCTANE_CLI" init
+python3 "$OCTANE_CLI" status
+python3 "$OCTANE_CLI" evidence add \
   --type source_observation \
   --description "The parser calls normalize_input before validation" \
   --file src/parser.py --symbol parse_input
-python3 "$OCTANCE_CLI" claim add \
+python3 "$OCTANE_CLI" claim add \
   --kind hypothesis --text "Normalization may change the value before validation" \
   --evidence EV-0001
-python3 "$OCTANCE_CLI" brief --task "trace parser validation" --budget-tokens 1200
+python3 "$OCTANE_CLI" brief --task "trace parser validation" --budget-tokens 1200
 ```
 
-Replace `EV-0001` with the ID returned by `evidence add`. Use `languages` for a source inventory, `graph` for file dependencies, and `locate --trace-file failure.log` to rank files from a saved failure trace. CLI output defaults to JSON. See the [portable skill command reference](octance/SKILL.md) for output options and ledger maintenance.
+Replace `EV-0001` with the returned evidence ID. Use `languages` for source inventory, `graph` for file dependencies, and `locate --trace-file failure.log` to rank files from a saved failure trace. `--human` produces readable output. `--format compact` produces compact JSON. Use `--agent` or `OCTANE_AGENT` to select a registered local identity.
 
-## Data and execution
+`octane native --help` exposes the existing Gateway database registration, scanning, and demonstration commands.
 
-- Octane stores its native SQLite database and disposable workspaces under `$OPENCLAW_STATE_DIR/octane`, or `~/.openclaw/octane` when the variable is unset. OpenClaw tool policy and configured project roots govern access. Docker runs use disposable snapshots, disabled container networking, and time and resource limits.
-- Octance stores its portable ledger under `.octance/` in the target project. `init` changes `.gitignore` only when given `--update-gitignore`. The portable CLI records observations and claims separately, analyzes files, and reads saved traces. Run tests through the host's approved tools.
-- Keep credentials outside analyzed trees and evidence records. Octane and Octance make no model calls directly. The OpenClaw agent uses the model provider configured in OpenClaw.
+## Storage and upgrades
+
+New project-local ledger records use `.octane/ledger.db` with `project.json` and `config.json`. Gateway investigations use `pil.sqlite3` and disposable workspaces under `$OPENCLAW_STATE_DIR/octane`, or `~/.openclaw/octane` when the variable is unset. Keep Gateway storage outside analyzed checkouts.
+
+Existing `.octance/octance.db` ledgers are opened in place with their records and event hashes preserved. The old `scripts/octance.py` entry point and `OCTANCE_AGENT` variable remain compatibility aliases. If a checkout contains both old and new ledger state, Octane reports a conflict so the active records can be selected explicitly. Upgrade the linked plugin and refresh the skill catalog to replace the former `octance` skill name.
+
+Docker runs use disposable snapshots, disabled container networking, and resource limits. Keep credentials outside source trees and evidence payloads. OpenClaw tool policy governs project and execution access.
 
 ## Development
-
-From the repository root, use Python 3.11+ for the full suite:
 
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 npm test
 ```
 
-[CI](.github/workflows/tests.yml) tests the portable skill on Python 3.9, the full suite on Python 3.11, 3.12, and 3.14, the optional parser, the Node bridge and package, and the Docker repair demonstration.
-
-See the [ledger architecture](docs/architecture.md) and [portable triage benchmark and limitations](docs/implementation-and-limitations.md) for implementation details.
+[CI](.github/workflows/tests.yml) exercises the local CLI on Python 3.9, the full suite on Python 3.11, 3.12, and 3.14, optional parsing, Node bridge and packaging, and a Docker repair demonstration. See the [architecture](docs/architecture.md), [workflow](docs/openclaw.md), and [implementation limits](docs/implementation-and-limitations.md).

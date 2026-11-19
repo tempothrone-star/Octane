@@ -1,4 +1,4 @@
-"""Deterministic, standard-library-only ledger used by the Octance skill."""
+"""Deterministic, standard-library-only ledger used by the Octane skill."""
 from __future__ import annotations
 
 import hashlib
@@ -35,10 +35,10 @@ _SECRET_KEY = re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|credent
 _SECRET_ASSIGNMENT = re.compile(r"(?i)((?:[A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|credential)[A-Za-z0-9_-]*)\s*[:=]\s*)([^\s,;]+)")
 _SECRET_TOKEN = re.compile(r"(?i)(?:\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b|\bBearer\s+[A-Za-z0-9._~+/-]+=*|(?<=://)[^/@:\s]+:[^/@\s]+@)")
 _PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
-_EXCLUDED_DIRS = {".git", ".octance", "__pycache__", ".venv", "venv", "node_modules", "dist", "build", ".tox"}
+_EXCLUDED_DIRS = {".git", ".octane", ".octance", "__pycache__", ".venv", "venv", "node_modules", "dist", "build", ".tox"}
 
 
-class OctanceError(Exception):
+class OctaneError(Exception):
     def __init__(self, message: str, code: int = 1, kind: str = "error"):
         super().__init__(message)
         self.code, self.kind = code, kind
@@ -67,7 +67,7 @@ def _within(path: Path, root: Path) -> bool:
 def _slug(name: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
     if not slug or len(slug) > 48:
-        raise OctanceError("agent name must contain 1 to 48 lowercase letters, digits, or hyphens", 2, "invalid_input")
+        raise OctaneError("agent name must contain 1 to 48 lowercase letters, digits, or hyphens", 2, "invalid_input")
     return slug
 
 
@@ -144,7 +144,7 @@ def revision_for(root: Path) -> str:
 def resolve_project_root(start: Optional[Path] = None, explicit: Optional[str] = None) -> Path:
     candidate = Path(explicit).expanduser().resolve() if explicit else (start or Path.cwd()).resolve()
     if not candidate.is_dir():
-        raise OctanceError("project root is not an existing directory", 2, "invalid_input")
+        raise OctaneError("project root is not an existing directory", 2, "invalid_input")
     try:
         result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(candidate),
                                 capture_output=True, text=True, timeout=2, check=False)
@@ -157,13 +157,25 @@ def resolve_project_root(start: Optional[Path] = None, explicit: Optional[str] =
     return candidate
 
 
+def ledger_location(root: Path) -> Tuple[Path, Path]:
+    """Reuse an existing ledger in place, including pre-rename projects."""
+    state = root / ".octane"
+    legacy = root / ".octance"
+    if legacy.exists():
+        if (state / "ledger.db").exists() or (state / "project.json").exists():
+            raise OctaneError("both .octane and .octance contain ledger state; select one project ledger before continuing",
+                              4, "project_conflict")
+        return legacy, legacy / "octance.db"
+    return state, state / "ledger.db"
+
+
 def discover_root(start: Optional[Path] = None) -> Path:
     current = (start or Path.cwd()).resolve()
     for candidate in (current,) + tuple(current.parents):
-        state = candidate / ".octance"
-        if (state / "project.json").is_file() and (state / "octance.db").is_file():
+        state, database = ledger_location(candidate)
+        if (state / "project.json").is_file() and database.is_file():
             return candidate
-    raise OctanceError("no Octance project found; run `python3 scripts/octance.py init` at the project root", 2, "not_initialized")
+    raise OctaneError("no Octane project found; run `python3 scripts/octane.py init` at the project root", 2, "not_initialized")
 
 
 def _filesystem_type(path: Path) -> Optional[str]:
@@ -219,11 +231,11 @@ class Ledger:
             else:
                 version = 0
             if version > 1:
-                raise OctanceError("database schema is newer than this Octance CLI", 1, "schema_too_new")
+                raise OctaneError("database schema is newer than this Octane CLI", 1, "schema_too_new")
             for number in range(version + 1, 2):
                 migration = MIGRATIONS / ("%03d_initial.sql" % number)
                 if not migration.is_file():
-                    raise OctanceError("missing database migration: " + str(migration), 1, "migration_missing")
+                    raise OctaneError("missing database migration: " + str(migration), 1, "migration_missing")
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     pending = ""
@@ -234,7 +246,7 @@ class Ledger:
                                 conn.execute(pending)
                             pending = ""
                     if pending.strip():
-                        raise OctanceError("incomplete SQL migration")
+                        raise OctaneError("incomplete SQL migration")
                     if number == 1:
                         conn.execute("INSERT INTO schema_version(version) VALUES(1)")
                     conn.commit()
@@ -246,12 +258,12 @@ class Ledger:
             conn.execute("CREATE INDEX IF NOT EXISTS claim_status_events_claim ON claim_status_events(claim_id,id)")
             conn.execute("CREATE TRIGGER IF NOT EXISTS claim_status_events_no_update BEFORE UPDATE ON claim_status_events BEGIN SELECT RAISE(ABORT, 'claim status events are append-only'); END")
             conn.execute("CREATE TRIGGER IF NOT EXISTS claim_status_events_no_delete BEFORE DELETE ON claim_status_events BEGIN SELECT RAISE(ABORT, 'claim status events are append-only'); END")
-            conn.execute("CREATE TABLE IF NOT EXISTS octance_internal_schema(version INTEGER NOT NULL)")
-            fts_version = conn.execute("SELECT version FROM octance_internal_schema LIMIT 1").fetchone()
+            conn.execute("CREATE TABLE IF NOT EXISTS octane_internal_schema(version INTEGER NOT NULL)")
+            fts_version = conn.execute("SELECT version FROM octane_internal_schema LIMIT 1").fetchone()
             if not fts_version or int(fts_version[0]) < 2:
                 conn.execute("DROP TABLE IF EXISTS evidence_fts")
-                conn.execute("DELETE FROM octance_internal_schema")
-                conn.execute("INSERT INTO octance_internal_schema(version) VALUES(2)")
+                conn.execute("DELETE FROM octane_internal_schema")
+                conn.execute("INSERT INTO octane_internal_schema(version) VALUES(2)")
             conn.commit()
             try:
                 conn.execute("BEGIN IMMEDIATE")
@@ -282,14 +294,14 @@ class Ledger:
         if count:
             integrity = self.verify_log(project_id)
             if not integrity["valid"]:
-                raise OctanceError("refusing to append to a damaged event log: " + integrity.get("reason", "integrity failure"), 1, "integrity_error")
+                raise OctaneError("refusing to append to a damaged event log: " + integrity.get("reason", "integrity failure"), 1, "integrity_error")
         request_json = canonical(request)
         key = explicit_key or _digest({"agent_id": agent_id, "op": op, "request": request})
         old = conn.execute("SELECT agent_id,op,payload_json FROM event_log WHERE idempotency_key=?", (key,)).fetchone()
         if old:
             envelope = json.loads(old["payload_json"])
             if old["agent_id"] != agent_id or old["op"] != op or envelope["request_json"] != request_json:
-                raise OctanceError("idempotency key was already used with different content", 2, "idempotency_conflict")
+                raise OctaneError("idempotency key was already used with different content", 2, "idempotency_conflict")
             return envelope["record"]
         record = builder(conn, utc_now())
         envelope = {"request_json": request_json, "record": record}
@@ -310,7 +322,7 @@ class Ledger:
     def agent(conn: sqlite3.Connection, agent_id: str, project_id: str) -> Dict[str, Any]:
         row = conn.execute("SELECT * FROM agents WHERE agent_id=? AND project_id=?", (agent_id, project_id)).fetchone()
         if not row:
-            raise OctanceError("agent is not registered in this project", 3, "permission_denied")
+            raise OctaneError("agent is not registered in this project", 3, "permission_denied")
         data = dict(row)
         data["permissions"] = json.loads(data.pop("permissions_json"))
         return data
@@ -318,7 +330,7 @@ class Ledger:
     @staticmethod
     def require(conn: sqlite3.Connection, actor: Dict[str, Any], permission: str) -> None:
         if "*" not in actor["permissions"] and permission not in actor["permissions"]:
-            raise OctanceError("agent lacks permission: " + permission, 3, "permission_denied")
+            raise OctaneError("agent lacks permission: " + permission, 3, "permission_denied")
 
     _require = require
 
@@ -463,26 +475,26 @@ class Ledger:
 def init_project(root: Path, update_gitignore: bool = False, trust_tier: str = "standard") -> Dict[str, Any]:
     root = root.resolve()
     if not root.is_dir():
-        raise OctanceError("project root is not a directory", 2, "invalid_input")
-    state = root / ".octance"
+        raise OctaneError("project root is not a directory", 2, "invalid_input")
+    state, database = ledger_location(root)
     state.mkdir(parents=True, exist_ok=True)
-    ledger = Ledger(state / "octance.db")
+    ledger = Ledger(database)
     existing = ledger.project_record()
     if existing:
         project_id = existing["project_id"]
         if existing["root"] != str(root):
-            raise OctanceError("stored project root does not match this directory", 1, "project_mismatch")
+            raise OctaneError("stored project root does not match this directory", 1, "project_mismatch")
         metadata_path = state / "project.json"
         if metadata_path.exists():
             try:
                 metadata = _read_json_object(metadata_path)
             except (OSError, ValueError) as error:
-                raise OctanceError("project.json is unreadable: " + str(error))
+                raise OctaneError("project.json is unreadable: " + str(error))
             if metadata.get("project_id") != project_id or metadata.get("root") != str(root):
-                raise OctanceError("project.json project_id/root does not match database", 1, "project_mismatch")
+                raise OctaneError("project.json project_id/root does not match database", 1, "project_mismatch")
     else:
         if trust_tier not in {"low", "standard"}:
-            raise OctanceError("default trust tier must be low or standard", 2, "invalid_input")
+            raise OctaneError("default trust tier must be low or standard", 2, "invalid_input")
         project_id, created_at = str(uuid.uuid4()), utc_now()
         permissions = sorted(ROLE_PERMISSIONS["admin"])
         owner = {"agent_id": "AG-owner", "project_id": project_id, "name": "owner", "role": "admin",
@@ -519,39 +531,40 @@ def init_project(root: Path, update_gitignore: bool = False, trust_tier: str = "
     warnings: List[str] = []
     gitignore = root / ".gitignore"
     current = gitignore.read_text(encoding="utf-8", errors="replace") if gitignore.exists() else ""
+    ignore_entry = state.name + "/"
     if update_gitignore:
-        if ".octance/" not in current:
-            gitignore.write_text(current + ("\n" if current and not current.endswith("\n") else "") + ".octance/\n", encoding="utf-8")
-    elif ".octance/" not in current:
-        warnings.append("Consider adding .octance/ to .gitignore; use init --update-gitignore to approve that edit")
-    return {"project_id": project_id, "root": str(root), "database": str(state / "octance.db"),
+        if ignore_entry not in current:
+            gitignore.write_text(current + ("\n" if current and not current.endswith("\n") else "") + ignore_entry + "\n", encoding="utf-8")
+    elif ignore_entry not in current:
+        warnings.append("Consider adding " + ignore_entry + " to .gitignore; use init --update-gitignore to approve that edit")
+    return {"project_id": project_id, "root": str(root), "database": str(database),
             "created": not bool(existing), "owner_agent": "AG-owner", "warnings": warnings}
 
 
 class Project:
     def __init__(self, root: Path):
         self.root = root.resolve()
-        self.state = self.root / ".octance"
+        self.state, database = ledger_location(self.root)
         try:
             self.metadata = _read_json_object(self.state / "project.json")
             self.config = _read_json_object(self.state / "config.json")
             if not _valid_config(self.config):
                 raise ValueError("config.json requires schema 1, a low/standard trust tier, and an execution_allowlist array")
         except (OSError, ValueError) as error:
-            raise OctanceError("project metadata/config is missing or invalid: " + str(error))
+            raise OctaneError("project metadata/config is missing or invalid: " + str(error))
         if self.metadata.get("root") != str(self.root):
-            raise OctanceError("project moved or renamed: stored root does not match current path", 1, "project_mismatch")
+            raise OctaneError("project moved or renamed: stored root does not match current path", 1, "project_mismatch")
         self.project_id = self.metadata.get("project_id")
-        self.ledger = Ledger(self.state / "octance.db")
+        self.ledger = Ledger(database)
         stored = self.ledger.project_record()
         if not self.project_id or not stored or stored["project_id"] != self.project_id or stored["root"] != str(self.root):
-            raise OctanceError("project_id/root mismatch between project.json and database", 1, "project_mismatch")
+            raise OctaneError("project_id/root mismatch between project.json and database", 1, "project_mismatch")
 
     def agent_id(self, requested: Optional[str] = None) -> str:
-        name = requested or os.environ.get("OCTANCE_AGENT") or "owner"
+        name = requested or os.environ.get("OCTANE_AGENT") or os.environ.get("OCTANCE_AGENT") or "owner"
         agent_id = name if name.startswith("AG-") else ("AG-owner" if name == "owner" else "AG-" + _slug(name))
         if self.ledger.get_agent(agent_id, self.project_id) is None:
-            raise OctanceError("agent is not registered in this project: " + agent_id, 3, "permission_denied")
+            raise OctaneError("agent is not registered in this project: " + agent_id, 3, "permission_denied")
         return agent_id
 
     def revision(self) -> str:
@@ -586,13 +599,13 @@ class Project:
     def register_agent(self, name: str, role: str, trust_tier: Optional[str], actor_id: str,
                        explicit_key: Optional[str] = None) -> Dict[str, Any]:
         if role not in {"explorer", "investigator", "tester", "documenter"}:
-            raise OctanceError("role must be explorer, investigator, tester, or documenter; admin is reserved", 2, "invalid_input")
+            raise OctaneError("role must be explorer, investigator, tester, or documenter; admin is reserved", 2, "invalid_input")
         actor = self.ledger.get_agent(actor_id, self.project_id)
         if actor is None or actor["role"] != "admin":
-            raise OctanceError("only an admin can register agents", 3, "permission_denied")
+            raise OctaneError("only an admin can register agents", 3, "permission_denied")
         name = _slug(name); tier = trust_tier or self.config.get("default_trust_tier", "standard")
         if tier not in {"low", "standard"}:
-            raise OctanceError("trust tier must be low or standard", 2, "invalid_input")
+            raise OctaneError("trust tier must be low or standard", 2, "invalid_input")
         permissions = sorted(ROLE_PERMISSIONS[role])
         request = {"name": name, "role": role, "trust_tier": tier}
         conn = self.ledger.connect()
@@ -609,7 +622,7 @@ class Project:
             result = dict(result); result.pop("permissions_json", None)
             return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctanceError("agent name already exists: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("agent name already exists: " + str(error), 2, "invalid_input")
         except Exception:
             conn.rollback(); raise
         finally:
@@ -620,9 +633,9 @@ class Project:
                      method: str = "agent_reported", related: Optional[List[str]] = None,
                      explicit_key: Optional[str] = None) -> Dict[str, Any]:
         if evidence_type not in EVIDENCE_TYPES or not isinstance(payload, dict):
-            raise OctanceError("invalid evidence type or payload; payload must be a JSON object", 2, "invalid_input")
+            raise OctaneError("invalid evidence type or payload; payload must be a JSON object", 2, "invalid_input")
         actor = self.ledger.get_agent(actor_id, self.project_id)
-        if actor is None: raise OctanceError("unknown agent", 3, "permission_denied")
+        if actor is None: raise OctaneError("unknown agent", 3, "permission_denied")
         self._require(actor, "evidence.add")
         redactions = [0]
         description = _redact(description, redactions); payload = _redact(payload, redactions)
@@ -630,16 +643,16 @@ class Project:
         symbol = _redact(symbol, redactions) if symbol else None
         method = _redact(method, redactions)
         if line_range is not None and (not isinstance(line_range, str) or not re.fullmatch(r"[1-9][0-9]*(?:-[1-9][0-9]*)?", line_range)):
-            raise OctanceError("line range must be a positive line number or start-end range", 2, "invalid_input")
+            raise OctaneError("line range must be a positive line number or start-end range", 2, "invalid_input")
         if line_range and "-" in line_range and int(line_range.split("-", 1)[0]) > int(line_range.split("-", 1)[1]):
-            raise OctanceError("line range start must not exceed its end", 2, "invalid_input")
+            raise OctaneError("line range start must not exceed its end", 2, "invalid_input")
         if file:
             relative = Path(file)
             if relative.is_absolute() or ".." in relative.parts or not _within((self.root / relative).resolve(), self.root):
-                raise OctanceError("evidence file must be a project-relative path inside this root", 2, "invalid_input")
+                raise OctaneError("evidence file must be a project-relative path inside this root", 2, "invalid_input")
         related = sorted(set(related or []))
         if any(not isinstance(item, str) or not item for item in related):
-            raise OctanceError("related evidence IDs must be non-empty strings", 2, "invalid_input")
+            raise OctaneError("related evidence IDs must be non-empty strings", 2, "invalid_input")
         request = {"type": evidence_type, "description": description, "payload": payload, "file": file,
                    "symbol": symbol, "line_range": line_range, "method": method, "related": related, "revision": self.revision()}
         conn = self.ledger.connect()
@@ -660,16 +673,16 @@ class Project:
                     c.execute("INSERT INTO evidence_fts VALUES(?,?,?,?,?,?,?)", (r["evidence_id"], self.project_id, evidence_type, description, r["payload_json"], file or "", symbol or ""))
                 for target in related:
                     if target == r["evidence_id"]:
-                        raise OctanceError("self-referential evidence links are not allowed", 2, "invalid_input")
+                        raise OctaneError("self-referential evidence links are not allowed", 2, "invalid_input")
                     found = c.execute("SELECT project_id FROM evidence WHERE evidence_id=?", (target,)).fetchone()
-                    if not found or found[0] != self.project_id: raise OctanceError("related evidence must belong to this project", 2, "invalid_input")
+                    if not found or found[0] != self.project_id: raise OctaneError("related evidence must belong to this project", 2, "invalid_input")
                     c.execute("INSERT INTO evidence_links VALUES(?,?,?,?,?)", (r["evidence_id"], target, "related_to", actor_id, r["created_at"]))
             result = self.ledger.event(conn, self.project_id, actor_id, "evidence.add", request, build, apply, explicit_key)
             conn.commit(); self.refresh_anchor()
             result = dict(result); result["payload"] = json.loads(result.pop("payload_json"))
             return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctanceError("evidence write rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("evidence write rejected: " + str(error), 2, "invalid_input")
         except Exception:
             conn.rollback(); raise
         finally:
@@ -678,9 +691,9 @@ class Project:
     def add_claim(self, actor_id: str, kind: str, text: str, supporting: Optional[List[str]] = None,
                   contradicting: Optional[List[str]] = None, depends: Optional[List[str]] = None,
                   explicit_key: Optional[str] = None) -> Dict[str, Any]:
-        if kind not in CLAIM_KINDS: raise OctanceError("invalid claim kind", 2, "invalid_input")
+        if kind not in CLAIM_KINDS: raise OctaneError("invalid claim kind", 2, "invalid_input")
         actor = self.ledger.get_agent(actor_id, self.project_id)
-        if actor is None: raise OctanceError("unknown agent", 3, "permission_denied")
+        if actor is None: raise OctaneError("unknown agent", 3, "permission_denied")
         self._require(actor, "claim.add")
         redactions = [0]; text = _redact(text, redactions)
         support, contradiction, dependencies = sorted(set(supporting or [])), sorted(set(contradicting or [])), sorted(set(depends or []))
@@ -688,10 +701,10 @@ class Project:
         try:
             for eid in support + contradiction:
                 row = conn.execute("SELECT project_id FROM evidence WHERE evidence_id=?", (eid,)).fetchone()
-                if not row or row[0] != self.project_id: raise OctanceError("claim evidence must belong to this project: " + eid, 2, "invalid_input")
+                if not row or row[0] != self.project_id: raise OctaneError("claim evidence must belong to this project: " + eid, 2, "invalid_input")
             for cid in dependencies:
                 row = conn.execute("SELECT project_id FROM claims WHERE claim_id=?", (cid,)).fetchone()
-                if not row or row[0] != self.project_id: raise OctanceError("dependent claim must belong to this project: " + cid, 2, "invalid_input")
+                if not row or row[0] != self.project_id: raise OctaneError("dependent claim must belong to this project: " + cid, 2, "invalid_input")
             evidence_types = {row[0] for eid in support for row in conn.execute("SELECT type FROM evidence WHERE evidence_id=?", (eid,))}
             basis = "static_analysis" if "static_analysis" in evidence_types else ("agent_inference" if support else "unsupported")
             status = "quarantined" if actor["trust_tier"] == "low" else "asserted"
@@ -713,7 +726,7 @@ class Project:
             conn.commit(); self.refresh_anchor()
             return self._claim_record(result)
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctanceError("claim write rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("claim write rejected: " + str(error), 2, "invalid_input")
         except Exception:
             conn.rollback(); raise
         finally:
@@ -728,7 +741,7 @@ class Project:
 
     def transition_claim(self, actor_id: str, claim_id: str, status: str, explicit_key: Optional[str] = None) -> Dict[str, Any]:
         if status not in CLAIM_STATUSES:
-            raise OctanceError("invalid claim status", 2, "invalid_input")
+            raise OctaneError("invalid claim status", 2, "invalid_input")
         conn = self.ledger.connect()
         try:
             conn.execute("BEGIN IMMEDIATE")
@@ -736,19 +749,19 @@ class Project:
             Ledger.require(conn, actor, "claim.transition")
             row = conn.execute("SELECT * FROM claims WHERE claim_id=? AND project_id=?", (claim_id, self.project_id)).fetchone()
             if not row:
-                raise OctanceError("unknown claim", 2, "not_found")
+                raise OctaneError("unknown claim", 2, "not_found")
             if explicit_key:
                 old = conn.execute("SELECT agent_id,op,payload_json FROM event_log WHERE idempotency_key=?",
                                    (explicit_key,)).fetchone()
                 if old:
                     integrity = self.ledger.verify_log(self.project_id)
                     if not integrity["valid"]:
-                        raise OctanceError("refusing retry against a damaged event log", 1, "integrity_error")
+                        raise OctaneError("refusing retry against a damaged event log", 1, "integrity_error")
                     envelope = json.loads(old["payload_json"])
                     original = json.loads(envelope["request_json"])
                     if (old["agent_id"] != actor_id or old["op"] != "claim.status"
                             or original.get("claim_id") != claim_id or original.get("status") != status):
-                        raise OctanceError("idempotency key was already used with different content", 2, "idempotency_conflict")
+                        raise OctaneError("idempotency key was already used with different content", 2, "idempotency_conflict")
                     conn.commit()
                     return envelope["record"]
             previous = conn.execute("SELECT id,previous_status,status,agent_id,created_at FROM claim_status_events WHERE claim_id=? ORDER BY id DESC LIMIT 1", (claim_id,)).fetchone()
@@ -758,7 +771,7 @@ class Project:
                 return {"claim_id": claim_id, "previous_status": previous["previous_status"], "status": status,
                         "agent_id": previous["agent_id"], "created_at": previous["created_at"]}
             if actor["trust_tier"] == "low" and status != previous_status:
-                raise OctanceError("low-trust agents cannot transition claim status", 2, "permission_denied")
+                raise OctaneError("low-trust agents cannot transition claim status", 2, "permission_denied")
             request = {"claim_id": claim_id, "status": status, "previous_status": previous_status,
                        "previous_event_id": previous["id"] if previous else None}
             def build(_conn: sqlite3.Connection, when: str) -> Dict[str, Any]:
@@ -772,23 +785,23 @@ class Project:
             self.refresh_anchor()
             return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctanceError("claim transition rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("claim transition rejected: " + str(error), 2, "invalid_input")
         except Exception:
             conn.rollback(); raise
         finally:
             conn.close()
 
     def link_evidence(self, actor_id: str, evidence_id: str, related_id: str, relation: str, explicit_key=None) -> Dict[str, Any]:
-        if relation not in {"supports", "contradicts", "context", "supersedes", "verifies", "related_to"}: raise OctanceError("invalid evidence relation", 2, "invalid_input")
+        if relation not in {"supports", "contradicts", "context", "supersedes", "verifies", "related_to"}: raise OctaneError("invalid evidence relation", 2, "invalid_input")
         return self._append_link(actor_id, "evidence.link", {"evidence_id": evidence_id, "related_id": related_id, "relation": relation}, explicit_key)
 
     def link_claim(self, actor_id: str, claim_id: str, related_id: str, relation: str, explicit_key=None) -> Dict[str, Any]:
-        if relation not in {"supports", "contradicts", "depends_on", "conflicts_with"}: raise OctanceError("invalid claim relation", 2, "invalid_input")
+        if relation not in {"supports", "contradicts", "depends_on", "conflicts_with"}: raise OctaneError("invalid claim relation", 2, "invalid_input")
         return self._append_link(actor_id, "claim.link", {"claim_id": claim_id, "related_id": related_id, "relation": relation}, explicit_key)
 
     def _append_link(self, actor_id: str, op: str, request: Dict[str, Any], explicit_key: Optional[str]) -> Dict[str, Any]:
         if request["related_id"] == request.get("evidence_id", request.get("claim_id")):
-            raise OctanceError("self-referential links are not allowed", 2, "invalid_input")
+            raise OctaneError("self-referential links are not allowed", 2, "invalid_input")
         permission = "evidence.link" if op == "evidence.link" else "claim.link"
         table, id_key = ("evidence", "evidence_id") if op == "evidence.link" else ("claims", "claim_id")
         right_key = "related_id" if op == "evidence.link" else "related_claim_id"
@@ -798,7 +811,7 @@ class Project:
             actor = Ledger.agent(conn, actor_id, self.project_id); Ledger.require(conn, actor, permission)
             for identifier in (request["evidence_id"], request["related_id"]) if op == "evidence.link" else (request["claim_id"], request["related_id"]):
                 row = conn.execute("SELECT project_id FROM " + table + " WHERE " + id_key + "=?", (identifier,)).fetchone()
-                if not row or row[0] != self.project_id: raise OctanceError("both linked records must belong to this project", 2, "invalid_input")
+                if not row or row[0] != self.project_id: raise OctaneError("both linked records must belong to this project", 2, "invalid_input")
             def build(_c: sqlite3.Connection, when: str) -> Dict[str, Any]:
                 return {"project_id": self.project_id, id_key: request.get(id_key), right_key: request["related_id"],
                         "relation": request["relation"], "agent_id": actor_id, "created_at": when}
@@ -808,7 +821,7 @@ class Project:
             result = self.ledger.event(conn, self.project_id, actor_id, op, request, build, apply, explicit_key)
             conn.commit(); self.refresh_anchor(); return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctanceError("link write rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("link write rejected: " + str(error), 2, "invalid_input")
         except Exception:
             conn.rollback(); raise
         finally:
@@ -826,9 +839,9 @@ class Project:
         return " AND ".join('"' + token.replace('"', '""') + '"' for token in re.findall(r"[A-Za-z0-9]+", query))
 
     def search_evidence(self, query: str = "", evidence_type: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
-        if not 1 <= limit <= 1000: raise OctanceError("limit must be 1..1000", 2, "invalid_input")
-        if len(query) > 4096: raise OctanceError("search query exceeds 4096 characters", 2, "invalid_input")
-        if len(re.findall(r"[A-Za-z0-9]+", query)) > 64: raise OctanceError("search query exceeds 64 terms", 2, "invalid_input")
+        if not 1 <= limit <= 1000: raise OctaneError("limit must be 1..1000", 2, "invalid_input")
+        if len(query) > 4096: raise OctaneError("search query exceeds 4096 characters", 2, "invalid_input")
+        if len(re.findall(r"[A-Za-z0-9]+", query)) > 64: raise OctaneError("search query exceeds 64 terms", 2, "invalid_input")
         if query and not re.findall(r"[A-Za-z0-9]+", query): return []
         clauses, params = ["project_id=?"], [self.project_id]
         if evidence_type: clauses.append("type=?"); params.append(evidence_type)
@@ -880,13 +893,13 @@ class Project:
         return self._attach_claim_details([self._claim_record(rows[0])])[0]
 
     def search_claims(self, query: str = "", status: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
-        if not 1 <= limit <= 1000: raise OctanceError("limit must be 1..1000", 2, "invalid_input")
-        if len(query) > 4096: raise OctanceError("search query exceeds 4096 characters", 2, "invalid_input")
-        if len(re.findall(r"[A-Za-z0-9]+", query)) > 64: raise OctanceError("search query exceeds 64 terms", 2, "invalid_input")
+        if not 1 <= limit <= 1000: raise OctaneError("limit must be 1..1000", 2, "invalid_input")
+        if len(query) > 4096: raise OctaneError("search query exceeds 4096 characters", 2, "invalid_input")
+        if len(re.findall(r"[A-Za-z0-9]+", query)) > 64: raise OctaneError("search query exceeds 64 terms", 2, "invalid_input")
         if query and not re.findall(r"[A-Za-z0-9]+", query): return []
         clauses, params = ["project_id=?"], [self.project_id]
         if status:
-            if status not in CLAIM_STATUSES: raise OctanceError("invalid claim status", 2, "invalid_input")
+            if status not in CLAIM_STATUSES: raise OctaneError("invalid claim status", 2, "invalid_input")
             clauses.append("COALESCE((SELECT status FROM claim_status_events e WHERE e.claim_id=claims.claim_id ORDER BY e.id DESC LIMIT 1),claims.status)=?")
             params.append(status)
         expr = self._fts_expression(query) if query and self.ledger.fts5 else ""
@@ -904,7 +917,7 @@ class Project:
         return self._attach_claim_details(claims)
 
     def brief(self, task: str, files: List[str], symbols: List[str], budget_tokens: int) -> Dict[str, Any]:
-        if not 1 <= budget_tokens <= 100000: raise OctanceError("budget-tokens must be 1..100000", 2, "invalid_input")
+        if not 1 <= budget_tokens <= 100000: raise OctaneError("budget-tokens must be 1..100000", 2, "invalid_input")
         task_terms = set(re.findall(r"[A-Za-z0-9]+", task.casefold()))
         requested_files = {item.replace("\\", "/").strip("./").casefold() for item in files if item.strip()}
         requested_symbols = {item.strip().casefold() for item in symbols if item.strip()}
@@ -971,7 +984,9 @@ class Project:
 
 
 def diagnose_project(root: Path) -> Dict[str, Any]:
-    root = root.resolve(); state = root / ".octance"; warnings: List[str] = []
+    root = root.resolve()
+    state, database_path = ledger_location(root)
+    warnings: List[str] = []
     metadata: Dict[str, Any] = {}; project_id = None; config_valid = False
     try:
         metadata = _read_json_object(state / "project.json"); project_id = metadata.get("project_id")
@@ -982,7 +997,6 @@ def diagnose_project(root: Path) -> Dict[str, Any]:
         config_valid = _valid_config(config)
     except (OSError, ValueError) as error: warnings.append("project config is invalid: " + str(error))
     conn = None; schema = None; journal = None; fts = False; db_error = None
-    database_path = state / "octance.db"
     if not database_path.is_file():
         db_error = "database file is missing"
     try:
@@ -995,8 +1009,8 @@ def diagnose_project(root: Path) -> Dict[str, Any]:
         if "schema_version" in tables:
             row = conn.execute("SELECT version FROM schema_version").fetchone(); schema = int(row[0]) if row else None
         try:
-            conn.execute("CREATE VIRTUAL TABLE temp.octance_doctor_fts USING fts5(text)"); fts = True
-            conn.execute("DROP TABLE temp.octance_doctor_fts")
+            conn.execute("CREATE VIRTUAL TABLE temp.octane_doctor_fts USING fts5(text)"); fts = True
+            conn.execute("DROP TABLE temp.octane_doctor_fts")
         except sqlite3.DatabaseError: fts = False
     except sqlite3.DatabaseError as error:
         db_error = str(error); warnings.append("database could not be inspected: " + db_error)
@@ -1004,7 +1018,7 @@ def diagnose_project(root: Path) -> Dict[str, Any]:
         if conn: conn.close()
     if not config_valid: warnings.append("config.json is missing or invalid")
     if schema is None: warnings.append("schema version is missing")
-    elif schema > 1: warnings.append("database schema is newer than this Octance CLI")
+    elif schema > 1: warnings.append("database schema is newer than this Octane CLI")
     elif schema < 1: warnings.append("database schema needs migration")
     if journal and journal.lower() != "wal": warnings.append("SQLite journal mode is %s, not WAL" % journal)
     fs = _filesystem_type(root)
@@ -1012,7 +1026,7 @@ def diagnose_project(root: Path) -> Dict[str, Any]:
     elif fs.lower() in {"nfs", "nfs4", "cifs", "smbfs", "sshfs", "9p", "afs"}: warnings.append("network filesystem %s detected; SQLite WAL is unsupported here" % fs)
     integrity: Dict[str, Any] = {"valid": False, "reason": "schema unsupported or database unavailable"}
     if schema == 1 and project_id and db_error is None:
-        ledger = object.__new__(Ledger); ledger.db_path = state / "octance.db"
+        ledger = object.__new__(Ledger); ledger.db_path = database_path
         integrity = ledger.verify_log(project_id)
         if not integrity["valid"]: warnings.append("event log integrity check failed: " + integrity.get("reason", "unknown"))
     return {"python": sys.version.split()[0], "python_ok": sys.version_info >= (3, 9), "sqlite": sqlite3.sqlite_version,

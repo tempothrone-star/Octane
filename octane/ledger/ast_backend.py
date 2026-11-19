@@ -1,4 +1,4 @@
-"""Optional, offline Tree-sitter syntax-tree backend for Octance.
+"""Optional, offline Tree-sitter syntax-tree backend for Octane.
 
 The default CLI does not require third-party packages. Installing the optional
 ``ast`` extra bundles a set of grammars locally; parsing never fetches grammars

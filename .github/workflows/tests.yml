@@ -24,7 +24,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Portable skill on Python 3.9
         if: matrix.python == '3.9'
-        run: python -m unittest discover -s tests -p 'test_octance*.py' -v
+        run: python -m unittest discover -s tests -p 'test_octane*.py' -v
       - name: Full standard-library suite
         if: matrix.python != '3.9'
         run: python -m unittest discover -s tests -v

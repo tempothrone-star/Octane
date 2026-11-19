@@ -1,26 +1,40 @@
-# Octance Phase 1 architecture
+# Project architecture
 
-## Product boundary
+Octane is one OpenClaw plugin and skill backed by a Python package. Its tools and CLI share the source analyzer. The OpenClaw agent supplies reasoning.
 
-The product is the portable OpenClaw skill in `octance/`: a concise workflow plus a deterministic Python CLI. The CLI has no model SDK, makes no network calls, and uses only Python 3.9+ standard-library modules. OpenClaw's host agent supplies reasoning; its configured tools and sandbox policy determine whether the CLI can read a project or execute.
+| Component | Entry point | State |
+| --- | --- | --- |
+| OpenClaw tools | `openclaw/index.js` registers tools and `openclaw/bridge.js` invokes the Python 3.11+ bridge | A Gateway-side Project Intelligence Layer (PIL) database and disposable workspaces |
+| Local evidence CLI | `scripts/octane.py` and `octane/ledger/` | A project-local `.octane/` ledger |
 
-The skill directory contains `SKILL.md`, a self-contained `scripts/` implementation, and numbered SQL migrations. `scripts/octance.py` at the repository root is a development convenience wrapper that invokes the bundled skill CLI.
+## Native project intelligence
+
+- `octane/repair.py` suggests baseline checks from checkout metadata. `octane/focus.py` builds a bounded, read-only symbol view from the working copy. Both accept an allowed checkout before it has a saved index.
+- `octane/scanner.py` builds the persistent index from source file hashes, import edges, and static call candidates. It reuses the portable dependency parser, adds Python lexical analysis, and can use Tree-sitter for other languages. The native database tracks revisions, evidence, hypotheses, graph history, and investigation checkpoints. Schema 5 adds saved exploration queues, execution records, and patch proposals.
+- `octane/workspace.py` copies an allowed checkout and keeps an unmounted baseline. Observation commands mount the snapshot read-only. Experimentation runs and candidate edits use a writable copy. Docker receives an explicit command and an allowlisted local image. The run records the immutable image ID, exit status, output, snapshot hashes, and any requested trace.
+- `octane/experiments.py` pairs the failing original check, passing candidate, and separate preservation checks. It binds the proposal to the current investigation, tested snapshots, and evidence of expected behavior. The proposal is a reviewable diff stored as evidence.
+
+The Gateway supplies agent identity and tool permissions. Configure allowed checkout roots, keep database and workspace storage outside analyzed projects, and authorize Docker images through the [plugin setup guide](../openclaw/README.md). For a full repair example, see the [native workflow](openclaw.md).
+
+## Portable ledger
+
+The root `SKILL.md` describes the repair workflow and CLI fallback. `scripts/octane.py`, `python -m octane`, and the installed `octane` command use one dispatcher. Local evidence commands use `octane/ledger/`, which also provides the source and dependency analyzer used by native scans. `octane native` exposes Gateway database commands.
 
 ## Project layout and identity
 
-Each analyzed root stores runtime state under `.octance/`:
+Each analyzed root stores runtime state under `.octane/`:
 
-- `octance.db`: SQLite WAL database, schema version 1.
+- `ledger.db`: SQLite WAL database, schema version 1.
 - `project.json`: project UUID, canonical root, and a last-committed log-head anchor.
 - `config.json`: default trust tier and an initially empty execution allowlist reserved for later phases.
 
-Initialization chooses `git rev-parse --show-toplevel` when Git is available; otherwise it uses the requested/current directory. All commands discover the nearest initialized root, compare its canonical path and project UUID with both the database and JSON metadata, and refuse if they disagree. `.gitignore` is never changed unless `init --update-gitignore` is explicitly provided. The repository itself is never used as a test project; tests initialize temporary roots.
+Initialization starts from the requested directory or the current working directory and uses the enclosing Git top-level when available. Ledger commands discover the nearest initialized project and check the canonical path and project UUID before reading or writing records. Static `languages`, `graph`, and `locate` commands also work on a checkout without an initialized ledger. Pass `init --update-gitignore` to add the state directory to `.gitignore`. Tests initialize temporary roots.
 
-The revision recorded with evidence and claims is a SHA-256 digest of relative file paths and file bytes, excluding `.git`, `.octance`, and common generated/cache directories. No file contents are stored in the database. Git is optional and the hash fallback needs no Git command.
+The revision recorded with evidence and claims is a SHA-256 digest of relative file paths and file bytes, excluding symlinks, `.git`, `.octane`, and common generated/cache directories. Hashing does not copy file contents into the database. Git is optional.
 
 ## Append-only ledger
 
-Every phase-1 write appends an event containing sequence, project, agent, operation, canonical JSON payload, idempotency key, previous hash, and UTC timestamp. The hash is SHA-256 over the previous hash concatenated with canonical JSON for the event without its hash. The log has SQLite update/delete triggers; verification checks sequence continuity, project identity, predecessor links, event hashes, and the external `project.json` head anchor. `verify-log` detects edits, deletions, and reordering in tests.
+Every portable ledger write appends an event containing sequence, project, agent, operation, canonical JSON payload, idempotency key, previous hash, and UTC timestamp. The hash is SHA-256 over the previous hash concatenated with canonical JSON for the event without its hash. The log has SQLite update/delete triggers; verification checks sequence continuity, project identity, predecessor links, event hashes, and the external `project.json` head anchor. `verify-log` detects edits, deletions, and reordering in tests.
 
 The anchor is updated after a committed event. As this update spans a database and a JSON file, a process interruption can leave it behind the database head; a verified anchor prefix is accepted. This is tamper evidence, not tamper prevention: an operator with raw shell access can alter the database and the anchor. SQLite permissions are cooperative guardrails, not a security boundary.
 
@@ -40,7 +54,7 @@ Common secret-like keys and values are redacted during evidence and claim ingest
 
 Connections enable foreign keys and a 5-second busy timeout. The database uses WAL and numbered transactional migrations. The CLI refuses a schema version newer than itself. `doctor` checks Python/SQLite versions, FTS5 availability, journal mode, log integrity, Git presence, and filesystem type where it can be detected. SQLite WAL is unsupported on some network filesystems; on platforms or mounts that cannot be identified, `doctor` warns rather than assuming local storage. Wall-clock timestamps are UTC ISO-8601; leases are not implemented yet, so clock-skew behavior remains future work.
 
-No project command execution, network access, telemetry, patch application, or source modification exists in Phase 1. The skill cannot guarantee shell isolation. OpenClaw's sandbox is off by default and configured separately; `exec` may run on the Gateway host unless policy routes it to a sandbox. Operators should restrict tools and configure sandbox workspace access appropriately.
+The portable CLI reads source and saved traces locally. Running tests through OpenClaw follows the host's tool and sandbox policy. The native plugin's Docker execution path has its own image allowlist and workspace boundaries.
 
 ## Multilingual source triage prototype
 
@@ -50,10 +64,12 @@ No project command execution, network access, telemetry, patch application, or s
 
 `locate --trace-file` accepts an existing project-local text trace, parses common Python, JavaScript/TypeScript, Go, Java, Rust, and C/C++ file/line frames, and ranks matching source files using repeated/early frames, path query terms, and recent Git changes when Git is available. The output includes rationale and simple traceback-order/recent-change baselines. This is a file-level ranking heuristic only: it does not resolve functions, parse complete language grammars, replay a check, prove causation, or set evidence to verified. Trace paths are untrusted input, constrained to the project root, and never executed. Ranking is bounded by source-file count/size limits and does not persist scan results.
 
-A 3-case controlled synthetic benchmark is provided in `tests/benchmark_localization.py`. It reports top-1 and mean reciprocal rank against traceback-first and recent-change-first baselines. Its cases are authored mechanics fixtures, not independent real-project ground truth; the measured score is not evidence of production localization quality and does not open the next phase gate.
+A three-case synthetic benchmark in `tests/benchmark_localization.py` reports top-1 and mean reciprocal rank against traceback-first and recent-change-first baselines. The cases check the ranking mechanics on authored fixtures. See the [implementation and limitations report](implementation-and-limitations.md) for results and scope.
 
-## Phase status
+## Portable scope
 
-Implemented: setup, project identity checks, owner and fixed-role agent registration, evidence/claim ingest and retrieval, secret redaction, hash-chain verification, idempotency, compact briefing, status/doctor, rebuild comparison, read-only multilingual extension inventory, a bounded best-effort internal file dependency graph with cross-language edges, and heuristic file-level trace ranking. Tests cover the Phase 1 ledger and current static-triage behavior.
+The portable CLI supports ledger operations and static file-level triage. Reopen source and rerun relevant checks before relying on old claims. Native investigation checkpoints, runtime traces, and patch proposals use the separate PIL store. The portable ledger has one numbered migration, with compatibility tables and full-text indexes managed at startup.
 
-Not implemented: predeclared replayable check definitions/execution, runtime trace capture, budgeted `explore`, function/symbol localization, representative real-project benchmark and measured go/no-go result, semantic ASTs or bundled grammars for every language (the optional Tree-sitter extra covers a subset), complete cross-language call graph, symbol footprints/staleness, investigation rows, leases, handoffs, optimistic versions, patch proposals, reports, export, numbered migrations after version 1, or full CLI command contract. Additive compatibility tables and FTS indexes are currently managed by startup code rather than later numbered SQL migrations. The controlled synthetic benchmark is preliminary and does not qualify as the required real-project gate. Do not treat old `octane/` or `openclaw/` code as evidence these Octance features exist.
+## Compatibility
+
+New local ledgers use `.octane/ledger.db`. Existing `.octance/octance.db` records are opened in place, preserving project identity, idempotency keys, and the anchored event history. If both ledger locations exist, the CLI reports `project_conflict`. The former script filename and agent environment variable remain aliases for existing integrations.

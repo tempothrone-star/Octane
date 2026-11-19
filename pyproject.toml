@@ -11,12 +11,15 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = []
 
+[project.scripts]
+octane = "octane.__main__:main"
+
 [project.optional-dependencies]
 ast = ["tree-sitter-languages==1.10.2", "tree-sitter==0.21.3"]
 
 [tool.setuptools.packages.find]
-include = ["octane*", "octance.scripts*"]
+include = ["octane*"]
 
 [tool.setuptools.package-data]
 octane = ["*.cjs", "*.rb"]
-"octance.scripts.octance" = ["migrations/*.sql"]
+"octane.ledger" = ["migrations/*.sql"]

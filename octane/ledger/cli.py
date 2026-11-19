@@ -1,4 +1,4 @@
-"""Command-line interface for the Octance skill."""
+"""Command-line interface for the Octane skill."""
 from __future__ import annotations
 
 import argparse
@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .core import CLAIM_KINDS, CLAIM_STATUSES, EVIDENCE_TYPES, Ledger, OctanceError, Project, canonical, diagnose_project, discover_root, init_project, resolve_project_root
+from .core import CLAIM_KINDS, CLAIM_STATUSES, EVIDENCE_TYPES, Ledger, OctaneError, Project, canonical, diagnose_project, discover_root, init_project, resolve_project_root
 from .polygraph import build_dependency_graph
 from .source import LANGUAGE_IMPORT_SYNTAX, LANGUAGES, locate_suspects, register_language, source_inventory
 
@@ -18,25 +18,26 @@ EXIT_STALE = 5
 EXIT_EXECUTION_DENIED = 6
 
 
-class OctanceArgumentParser(argparse.ArgumentParser):
+class OctaneArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
-        raise OctanceError(message, 2, "invalid_input")
+        raise OctaneError(message, 2, "invalid_input")
 
 
 def _common(parser: argparse.ArgumentParser, include_agent: bool = True) -> None:
     if include_agent:
-        parser.add_argument("--agent", help="Octance agent name or AG-<name>; defaults to OCTANCE_AGENT or owner")
+        parser.add_argument("--agent", help="Octane agent name or AG-<name>; defaults to OCTANE_AGENT or owner")
     parser.add_argument("--human", action="store_true", help="print a readable response instead of JSON")
     parser.add_argument("--format", choices=("json", "compact"), default="json", help="JSON formatting")
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = OctanceArgumentParser(prog="python3 scripts/octance.py", description="Persistent, evidence-backed project intelligence for OpenClaw agents")
-    commands = parser.add_subparsers(dest="command", required=True, parser_class=OctanceArgumentParser)
+    parser = OctaneArgumentParser(prog="octane", description="Evidence, source graphs, and project context for Octane",
+                                  epilog="Use 'octane native --help' for Gateway project registration and scanning (Python 3.11+).")
+    commands = parser.add_subparsers(dest="command", required=True, parser_class=OctaneArgumentParser)
 
     init = commands.add_parser("init", help="initialize this project-local ledger")
     init.add_argument("--project-root", help="project root; defaults to Git top-level or current directory")
-    init.add_argument("--update-gitignore", action="store_true", help="explicitly add .octance/ to .gitignore")
+    init.add_argument("--update-gitignore", action="store_true", help="explicitly add .octane/ to .gitignore")
     init.add_argument("--trust-tier", choices=("low", "standard"), default="standard")
     _common(init, include_agent=False)
 
@@ -49,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(rebuild)
 
     agent = commands.add_parser("agent", help="manage project-local agent identities")
-    agent_commands = agent.add_subparsers(dest="agent_command", required=True, parser_class=OctanceArgumentParser)
+    agent_commands = agent.add_subparsers(dest="agent_command", required=True, parser_class=OctaneArgumentParser)
     register = agent_commands.add_parser("register", help="register an agent with a fixed least-privilege role")
     register.add_argument("--name", required=True)
     register.add_argument("--role", required=True, choices=("explorer", "investigator", "tester", "documenter"))
@@ -58,11 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
     show = agent_commands.add_parser("show", help="show a project-local agent")
     show.add_argument("name")
     _common(show)
-    whoami = agent_commands.add_parser("whoami", help="show the current Octance identity")
+    whoami = agent_commands.add_parser("whoami", help="show the current Octane identity")
     _common(whoami)
 
     evidence = commands.add_parser("evidence", help="record and retrieve immutable observations")
-    evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True, parser_class=OctanceArgumentParser)
+    evidence_commands = evidence.add_subparsers(dest="evidence_command", required=True, parser_class=OctaneArgumentParser)
     add = evidence_commands.add_parser("add", help="append an immutable evidence record")
     add.add_argument("--type", required=True, choices=sorted(EVIDENCE_TYPES))
     add.add_argument("--description", required=True)
@@ -90,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
     _common(link)
 
     claim = commands.add_parser("claim", help="record beliefs separately from observations")
-    claim_commands = claim.add_subparsers(dest="claim_command", required=True, parser_class=OctanceArgumentParser)
+    claim_commands = claim.add_subparsers(dest="claim_command", required=True, parser_class=OctaneArgumentParser)
     add_claim = claim_commands.add_parser("add", help="append an evidence-linked claim")
     add_claim.add_argument("--kind", required=True, choices=sorted(CLAIM_KINDS))
     add_claim.add_argument("--text", required=True)
@@ -195,9 +196,9 @@ def _load_payload(text: str) -> Dict[str, Any]:
     try:
         value = json.loads(text)
     except ValueError as error:
-        raise OctanceError("--payload must be valid JSON: " + str(error), 2, "invalid_input")
+        raise OctaneError("--payload must be valid JSON: " + str(error), 2, "invalid_input")
     if not isinstance(value, dict):
-        raise OctanceError("--payload must decode to a JSON object", 2, "invalid_input")
+        raise OctaneError("--payload must decode to a JSON object", 2, "invalid_input")
     return value
 
 
@@ -206,24 +207,24 @@ def _register_language_config(root: Path, config_name: Optional[str]) -> None:
         return
     supplied = Path(config_name)
     if supplied.is_absolute():
-        raise OctanceError("language config must be a project-relative path", 2, "invalid_input")
+        raise OctaneError("language config must be a project-relative path", 2, "invalid_input")
     unresolved = root / supplied
     if unresolved.is_symlink():
-        raise OctanceError("language config must not be a symlink", 2, "invalid_input")
+        raise OctaneError("language config must not be a symlink", 2, "invalid_input")
     path = unresolved.resolve()
     try:
         path.relative_to(root)
     except ValueError:
-        raise OctanceError("language config must be inside the project root", 2, "invalid_input")
+        raise OctaneError("language config must be inside the project root", 2, "invalid_input")
     try:
         if not path.is_file() or path.stat().st_size > 1024 * 1024:
-            raise OctanceError("language config must be a regular file no larger than 1 MiB", 2, "invalid_input")
+            raise OctaneError("language config must be a regular file no larger than 1 MiB", 2, "invalid_input")
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
-        raise OctanceError("cannot read language config: " + str(error), 2, "invalid_input")
+        raise OctaneError("cannot read language config: " + str(error), 2, "invalid_input")
     languages = payload.get("languages") if isinstance(payload, dict) else None
     if not isinstance(languages, dict) or len(languages) > 256:
-        raise OctanceError("language config must contain a languages object with at most 256 entries", 2, "invalid_input")
+        raise OctaneError("language config must contain a languages object with at most 256 entries", 2, "invalid_input")
     original_languages = dict(LANGUAGES)
     original_syntax = dict(LANGUAGE_IMPORT_SYNTAX)
     try:
@@ -243,14 +244,14 @@ def _register_language_config(root: Path, config_name: Optional[str]) -> None:
         LANGUAGES.update(original_languages)
         LANGUAGE_IMPORT_SYNTAX.clear()
         LANGUAGE_IMPORT_SYNTAX.update(original_syntax)
-        raise OctanceError("invalid language config: " + str(error), 2, "invalid_input")
+        raise OctaneError("invalid language config: " + str(error), 2, "invalid_input")
 
 
 def _run(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "init":
         root = resolve_project_root(explicit=args.project_root)
         result = init_project(root, args.update_gitignore, args.trust_tier)
-        return _response(result, result.pop("warnings", []), ["Run `python3 scripts/octance.py status` to inspect the new ledger"])
+        return _response(result, result.pop("warnings", []), ["Run `python3 scripts/octane.py status` to inspect the new ledger"])
     if args.command == "doctor":
         root = resolve_project_root()
         result = diagnose_project(root)
@@ -262,7 +263,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
     agent_id = project.agent_id(getattr(args, "agent", None))
     actor = project.ledger.get_agent(agent_id, project.project_id)
     if actor is None:
-        raise OctanceError("agent identity is not registered", 3, "permission_denied")
+        raise OctaneError("agent identity is not registered", 3, "permission_denied")
     connection = project.ledger.connect()
     try:
         if args.command in {"status", "verify-log", "rebuild", "languages", "locate", "graph"}:
@@ -275,50 +276,50 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
     if args.command == "verify-log":
         result = project.ledger.verify_log(project.project_id)
         if not result["valid"]:
-            raise OctanceError("event log verification failed at %s: %s" % (result.get("first_bad_seq"), result["reason"]), 1, "integrity_error")
+            raise OctaneError("event log verification failed at %s: %s" % (result.get("first_bad_seq"), result["reason"]), 1, "integrity_error")
         return _response(result)
     if args.command == "rebuild":
         result = project.ledger.rebuild_check(project.project_id)
         if not result["matches"]:
-            raise OctanceError("materialized tables do not match event-log replay: " + ", ".join(result.get("mismatches", [])), 1, "rebuild_mismatch")
+            raise OctaneError("materialized tables do not match event-log replay: " + ", ".join(result.get("mismatches", [])), 1, "rebuild_mismatch")
         return _response(result)
     if args.command == "languages":
         try:
             return _response(source_inventory(root, args.max_files, args.max_file_bytes))
         except ValueError as error:
-            raise OctanceError(str(error), 2, "invalid_input")
+            raise OctaneError(str(error), 2, "invalid_input")
     if args.command == "locate":
         supplied_trace = Path(args.trace_file)
         if supplied_trace.is_absolute():
-            raise OctanceError("trace file must be a project-relative path", 2, "invalid_input")
+            raise OctaneError("trace file must be a project-relative path", 2, "invalid_input")
         unresolved_trace = root / supplied_trace
         if unresolved_trace.is_symlink():
-            raise OctanceError("trace file must not be a symlink", 2, "invalid_input")
+            raise OctaneError("trace file must not be a symlink", 2, "invalid_input")
         trace_path = unresolved_trace.resolve()
         try:
             trace_path.relative_to(root)
         except ValueError:
-            raise OctanceError("trace file must be inside the project root", 2, "invalid_input")
+            raise OctaneError("trace file must be inside the project root", 2, "invalid_input")
         if not trace_path.is_file():
-            raise OctanceError("trace file must be a regular project-local file", 2, "invalid_input")
+            raise OctaneError("trace file must be a regular project-local file", 2, "invalid_input")
         try:
             if trace_path.stat().st_size > 5 * 1024 * 1024:
-                raise OctanceError("trace file exceeds the 5 MiB input limit", 2, "invalid_input")
+                raise OctaneError("trace file exceeds the 5 MiB input limit", 2, "invalid_input")
             trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
         except OSError as error:
-            raise OctanceError("cannot read trace file: " + str(error), 2, "invalid_input")
+            raise OctaneError("cannot read trace file: " + str(error), 2, "invalid_input")
         try:
             result = locate_suspects(root, trace_text, args.query, args.limit,
                                      args.max_files, args.max_file_bytes)
         except ValueError as error:
-            raise OctanceError(str(error), 2, "invalid_input")
+            raise OctaneError(str(error), 2, "invalid_input")
         return _response(result)
     if args.command == "graph":
         try:
             result = build_dependency_graph(root, args.max_files, args.max_file_bytes,
                                             args.max_total_bytes, parser=args.parser)
         except ValueError as error:
-            raise OctanceError(str(error), 2, "invalid_input")
+            raise OctaneError(str(error), 2, "invalid_input")
         return _response(result)
     if args.command == "agent":
         if args.agent_command == "register":
@@ -328,7 +329,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         target = args.name if args.name.startswith("AG-") else "AG-" + args.name
         result = project.ledger.get_agent(target, project.project_id)
         if result is None:
-            raise OctanceError("unknown agent: " + target, 2, "not_found")
+            raise OctaneError("unknown agent: " + target, 2, "not_found")
         connection = project.ledger.connect()
         try:
             project.ledger._require(connection, actor, "status")
@@ -349,7 +350,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 connection.close()
             result = project.get_evidence(args.evidence_id)
             if result is None:
-                raise OctanceError("evidence not found in this project", 2, "not_found")
+                raise OctaneError("evidence not found in this project", 2, "not_found")
             return _response(result)
         if args.evidence_command == "search":
             connection = project.ledger.connect()
@@ -375,7 +376,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 connection.close()
             result = project.get_claim(args.claim_id)
             if result is None:
-                raise OctanceError("claim not found in this project", 2, "not_found")
+                raise OctaneError("claim not found in this project", 2, "not_found")
             return _response(result)
         if args.claim_command == "search":
             connection = project.ledger.connect()
@@ -394,7 +395,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         data = project.brief(args.task, [x for x in args.files.split(",") if x],
                              [x for x in args.symbols.split(",") if x], args.budget_tokens)
         return _response(data, next_steps=["Record new observations as evidence before adding claims"])
-    raise OctanceError("unsupported command", 2, "invalid_input")
+    raise OctaneError("unsupported command", 2, "invalid_input")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -404,7 +405,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         result = _run(args)
         _emit(result, args)
         return 0
-    except OctanceError as error:
+    except OctaneError as error:
         args = locals().get("args", argparse.Namespace(human=False, format="json"))
         result = _response(error=str(error.kind), message=str(error), next_steps=[])
         _emit(result, args)

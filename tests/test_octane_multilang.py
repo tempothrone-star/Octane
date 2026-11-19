@@ -10,9 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-ENTRY = ROOT / "scripts" / "octance.py"
-sys.path.insert(0, str(ROOT / "octance" / "scripts"))
-from octance.source import locate_suspects, parse_stack_frames, source_inventory  # noqa: E402
+ENTRY = ROOT / "scripts" / "octane.py"
+sys.path.insert(0, str(ROOT))
+from octane.ledger.source import locate_suspects, parse_stack_frames, source_inventory  # noqa: E402
 
 
 class MultilingualInventoryTests(unittest.TestCase):
@@ -112,7 +112,7 @@ class MultilingualInventoryTests(unittest.TestCase):
         python_trace = ('Traceback (most recent call last):\n'
                         '  File "src/main.py", line 10, in main\n'
                         '  File "src/parser.py", line 44, in parse')
-        with patch("octance.source.recent_project_changes", return_value=([], None)):
+        with patch("octane.ledger.source.recent_project_changes", return_value=([], None)):
             result = locate_suspects(self.root, python_trace)
         self.assertEqual(result["suspects"][0]["path"], "src/parser.py")
         self.assertEqual(result["baselines"]["traceback_primary_order"], ["src/parser.py", "src/main.py"])
@@ -138,20 +138,20 @@ class MultilingualInventoryTests(unittest.TestCase):
         self.write("src/helper.qz", "module helper\n")
         code, init = self.invoke("init", "--project-root", str(self.root))
         self.assertEqual(code, 0, init)
-        config = self.root / ".octance" / "languages.json"
+        config = self.root / ".octane" / "languages.json"
         config.write_text(json.dumps({"languages": {"quartz": {
             "extensions": [".qz"], "quoted_import_keywords": ["fetch"],
             "module_import_keywords": ["attach"], "from_import": True}}}), encoding="utf-8")
-        code, inventory = self.invoke("languages", "--language-config", ".octance/languages.json")
+        code, inventory = self.invoke("languages", "--language-config", ".octane/languages.json")
         self.assertEqual(code, 0, inventory)
         self.assertEqual(inventory["data"]["languages"]["quartz"], 2)
-        code, graph = self.invoke("graph", "--language-config", ".octance/languages.json")
+        code, graph = self.invoke("graph", "--language-config", ".octane/languages.json")
         self.assertEqual(code, 0, graph)
         self.assertIn(("src/main.qz", "src/helper.qz"),
                       {(edge["source"], edge["target"]) for edge in graph["data"]["edges"]})
         self.write("failure.log", "at handler (src/main.qz:17)\n")
         code, located = self.invoke("locate", "--trace-file", "failure.log",
-                                    "--language-config", ".octance/languages.json")
+                                    "--language-config", ".octane/languages.json")
         self.assertEqual(code, 0, located)
         self.assertEqual(located["data"]["suspects"][0]["path"], "src/main.qz")
 

@@ -6,15 +6,15 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "octance" / "scripts"))
+sys.path.insert(0, str(ROOT))
 
 try:
     import tree_sitter_languages  # noqa: F401
 except ImportError:
     raise unittest.SkipTest("optional Tree-sitter extra is not installed")
 
-from octance import ast_backend  # noqa: E402
-from octance.polygraph import build_dependency_graph  # noqa: E402
+from octane.ledger import ast_backend  # noqa: E402
+from octane.ledger.polygraph import build_dependency_graph  # noqa: E402
 
 
 class TreeSitterGraphTests(unittest.TestCase):
@@ -55,7 +55,7 @@ class TreeSitterGraphTests(unittest.TestCase):
             self.assertTrue(any(edge["basis"] == "Tree-sitter syntax tree" for edge in graph["edges"]))
 
     def test_explicit_tree_sitter_mode_requires_the_optional_dependency(self):
-        from octance import ast_backend
+        from octane.ledger import ast_backend
         if ast_backend.available():
             self.skipTest("optional Tree-sitter package is available")
         with tempfile.TemporaryDirectory() as directory:

@@ -53,10 +53,12 @@ test("npm package contains both runtimes, skill migrations, and linked documenta
     "octane/native_trace.py", "octane/native_trace_runner.py",
     "octane/syntax_calls.py", "octane/runtime_profiles.py", "octane/call_plot.py", "octane/focus.py", "octane/node_trace_runner.cjs",
     "octane/ruby_trace_runner.rb",
-    "openclaw/skills/octane/SKILL.md", "octance/SKILL.md", "octance/scripts/octance.py",
-    "octance/scripts/octance/core.py", "octance/scripts/octance/migrations/001_initial.sql",
+    "SKILL.md", "scripts/octane.py", "octane/__main__.py",
+    "octane/ledger/core.py", "octane/ledger/migrations/001_initial.sql", "references/investigate.md",
     "docs/architecture.md", "docs/implementation-and-limitations.md"]) {
     assert.ok(files.has(path), `Missing package file: ${path}`);
   }
   assert.ok([...files].every((path) => !path.includes("__pycache__") && !path.endsWith(".pyc")));
+  assert.deepEqual([...files].filter((path) => path.endsWith("SKILL.md")), ["SKILL.md"]);
+  assert.ok([...files].every((path) => !path.startsWith("octance/")));
 });

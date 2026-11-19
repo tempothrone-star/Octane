@@ -8,8 +8,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "octance" / "scripts"))
-from octance.source import locate_suspects  # noqa: E402
+sys.path.insert(0, str(ROOT))
+from octane.ledger.source import locate_suspects  # noqa: E402
 
 CASES = [
     {
@@ -43,13 +43,13 @@ def reciprocal_rank(order: list[str], expected: str) -> float:
 def main() -> int:
     outcomes = []
     for case in CASES:
-        with tempfile.TemporaryDirectory(prefix="octance-loc-bench-") as directory:
+        with tempfile.TemporaryDirectory(prefix="octane-loc-bench-") as directory:
             root = Path(directory)
             for relative in case["files"]:
                 path = root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("// synthetic fixture; deliberately not executable\n", encoding="utf-8")
-            with patch("octance.source.recent_project_changes", return_value=(case["recent"], None)):
+            with patch("octane.ledger.source.recent_project_changes", return_value=(case["recent"], None)):
                 result = locate_suspects(root, case["trace"])
             ranked = [item["path"] for item in result["suspects"]]
             traceback_baseline = result["baselines"]["traceback_primary_order"]

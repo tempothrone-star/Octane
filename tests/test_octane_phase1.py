@@ -10,12 +10,12 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "octance" / "scripts"))
-from octance.core import OctanceError, Project  # noqa: E402
-ENTRY = ROOT / "scripts" / "octance.py"
+sys.path.insert(0, str(ROOT))
+from octane.ledger.core import OctaneError, Project  # noqa: E402
+ENTRY = ROOT / "scripts" / "octane.py"
 
 
-class OctancePhaseOneTests(unittest.TestCase):
+class OctanePhaseOneTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -38,21 +38,21 @@ class OctancePhaseOneTests(unittest.TestCase):
         root.mkdir()
         code, result = self.invoke(root, "init", "--project-root", str(root), "--format", "compact", *args)
         self.assertEqual(code, 0, result)
-        self.assertTrue((root / ".octance" / "octance.db").is_file())
-        self.assertTrue((root / ".octance" / "project.json").is_file())
-        self.assertTrue((root / ".octance" / "config.json").is_file())
+        self.assertTrue((root / ".octane" / "ledger.db").is_file())
+        self.assertTrue((root / ".octane" / "project.json").is_file())
+        self.assertTrue((root / ".octane" / "config.json").is_file())
         return root, result["data"]["project_id"]
 
     def test_init_project_identity_owner_and_opt_in_gitignore_edit(self):
         root, project_id = self.init()
-        self.assertEqual(json.loads((root / ".octance/project.json").read_text())["project_id"], project_id)
+        self.assertEqual(json.loads((root / ".octane/project.json").read_text())["project_id"], project_id)
         self.assertFalse((root / ".gitignore").exists())
         code, result = self.invoke(root, "agent", "whoami")
         self.assertEqual(code, 0, result)
         self.assertEqual(result["data"]["agent_id"], "AG-owner")
         second, second_id = self.init("approved", "--update-gitignore")
         self.assertNotEqual(project_id, second_id)
-        self.assertIn(".octance/", (second / ".gitignore").read_text())
+        self.assertIn(".octane/", (second / ".gitignore").read_text())
 
     def test_project_json_mismatch_and_cross_project_evidence_are_refused(self):
         first, first_id = self.init("first")
@@ -62,7 +62,7 @@ class OctancePhaseOneTests(unittest.TestCase):
         code, response = self.invoke(second, "claim", "add", "--kind", "hypothesis", "--text", "possible issue", "--evidence", "EV-0001")
         self.assertEqual(code, 2)
         self.assertFalse(response["ok"])
-        meta_path = first / ".octance/project.json"
+        meta_path = first / ".octane/project.json"
         metadata = json.loads(meta_path.read_text())
         metadata["project_id"] = second_id
         meta_path.write_text(json.dumps(metadata))
@@ -77,7 +77,7 @@ class OctancePhaseOneTests(unittest.TestCase):
                 root, _ = self.init(operation)
                 code, _ = self.invoke(root, "evidence", "add", "--type", "file_hash", "--description", "snapshot")
                 self.assertEqual(code, 0)
-                db = sqlite3.connect(root / ".octance/octance.db")
+                db = sqlite3.connect(root / ".octane/ledger.db")
                 db.execute("DROP TRIGGER event_log_no_update")
                 db.execute("DROP TRIGGER event_log_no_delete")
                 if operation == "edit":
@@ -106,7 +106,7 @@ class OctancePhaseOneTests(unittest.TestCase):
         code, result = self.invoke(root, "rebuild", "--check")
         self.assertEqual(code, 0, result)
         self.assertTrue(result["data"]["matches"], result)
-        db = sqlite3.connect(root / ".octance/octance.db")
+        db = sqlite3.connect(root / ".octane/ledger.db")
         with self.assertRaises(sqlite3.IntegrityError):
             db.execute("UPDATE evidence SET description='rewritten' WHERE evidence_id='EV-0001'")
         with self.assertRaises(sqlite3.IntegrityError):
@@ -138,7 +138,7 @@ class OctancePhaseOneTests(unittest.TestCase):
                                    "Authorization: Bearer supersecret123 and https://alice:password@example.test/a access_token=access123 client_secret=secret123 db_password=dbpass123",
                                    "--payload", '{"my_secret_value":"hidden","note":"token=abc123"}')
         self.assertEqual(code, 0, result)
-        database = (root / ".octance/octance.db").read_bytes()
+        database = (root / ".octane/ledger.db").read_bytes()
         for secret in (b"supersecret123", b"alice:password", b"access123", b"secret123", b"dbpass123", b"hidden", b"token=abc123"):
             self.assertNotIn(secret, database)
         bad, response = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "range",
@@ -152,7 +152,7 @@ class OctancePhaseOneTests(unittest.TestCase):
         code, result = self.invoke(root, "doctor")
         self.assertEqual(code, 0, result)
         self.assertIsNone(result["data"]["schema_version"])
-        self.assertFalse((root / ".octance" / "octance.db").exists())
+        self.assertFalse((root / ".octane" / "ledger.db").exists())
         root, _ = self.init("claim-root")
         code, self_evidence = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "self link", "--related", "EV-0001")
         self.assertEqual(code, 2, self_evidence)
@@ -219,7 +219,7 @@ class OctancePhaseOneTests(unittest.TestCase):
         evidence = project.add_evidence(low, "source_observation", "observed", {})
         claim = project.add_claim(low, "hypothesis", "skip the validation", supporting=[evidence["evidence_id"]])
         self.assertEqual(claim["status"], "quarantined")
-        with self.assertRaises(OctanceError) as caught:
+        with self.assertRaises(OctaneError) as caught:
             project.transition_claim(low, claim["claim_id"], "asserted")
         self.assertEqual(caught.exception.kind, "permission_denied")
         self.assertEqual(project.get_claim(claim["claim_id"])["status"], "quarantined")
@@ -257,7 +257,7 @@ class OctancePhaseOneTests(unittest.TestCase):
         code, result = self.invoke(root, "evidence", "add", "--type", "config_observation", "--description", "config checked", "--payload", payload)
         self.assertEqual(code, 0, result)
         self.assertGreaterEqual(result["data"]["redactions"], 2)
-        db_bytes = (root / ".octance/octance.db").read_bytes()
+        db_bytes = (root / ".octane/ledger.db").read_bytes()
         self.assertNotIn(b"sensitive-value", db_bytes)
         self.assertNotIn(b"hunter2", db_bytes)
         code, claim = self.invoke(root, "claim", "add", "--kind", "intent", "--text", "password=do-not-store")
@@ -283,7 +283,7 @@ class OctancePhaseOneTests(unittest.TestCase):
 
     def test_migration_from_empty_and_newer_schema_refusal(self):
         root, _ = self.init()
-        db = sqlite3.connect(root / ".octance/octance.db")
+        db = sqlite3.connect(root / ".octane/ledger.db")
         self.assertEqual(db.execute("SELECT version FROM schema_version").fetchone()[0], 1)
         db.execute("UPDATE schema_version SET version=99")
         db.commit()
@@ -298,7 +298,7 @@ class OctancePhaseOneTests(unittest.TestCase):
 
     def test_doctor_reports_malformed_config_without_masking_it(self):
         root, _ = self.init()
-        (root / ".octance/config.json").write_text("{broken", encoding="utf-8")
+        (root / ".octane/config.json").write_text("{broken", encoding="utf-8")
         code, doctor = self.invoke(root, "doctor")
         self.assertEqual(code, 0)
         self.assertFalse(doctor["data"]["config_valid"])
@@ -318,7 +318,7 @@ class OctancePhaseOneTests(unittest.TestCase):
         self.assertEqual(len({json.loads(stdout)["data"]["evidence_id"] for stdout, _stderr, _code in outputs}), 8)
         code, result = self.invoke(root, "evidence", "add", "--type", "source_observation", "--description", "bad link", "--related", "EV-9999")
         self.assertEqual(code, 2)
-        connection = sqlite3.connect(root / ".octance/octance.db")
+        connection = sqlite3.connect(root / ".octane/ledger.db")
         self.assertEqual(connection.execute("SELECT count(*) FROM evidence").fetchone()[0], 8)
         self.assertEqual(connection.execute("SELECT count(*) FROM event_log").fetchone()[0], 10)
         connection.close()

@@ -12,3 +12,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # The bundled grammar loader uses the pre-0.22 Python API. A newer runtime
+    # requires a coordinated loader/grammar migration, not a standalone bump.
+    ignore:
+      - dependency-name: "tree-sitter"
+        versions: [">=0.22.0"]

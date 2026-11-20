@@ -47,7 +47,7 @@ class PILTests(unittest.TestCase):
             connection.execute("INSERT INTO schema_migrations VALUES(1,'2025-01-01T00:00:00+00:00')")
         upgraded = ProjectIntelligence(path)
         with upgraded._session() as connection:
-            self.assertEqual([row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5])
+            self.assertEqual([row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")], [1, 2, 3, 4, 5, 6])
             columns = {row[1] for row in connection.execute("PRAGMA table_info(projects)")}
             self.assertIn("last_indexed_at", columns)
             investigation_columns = {row[1] for row in connection.execute("PRAGMA table_info(investigations)")}
@@ -68,7 +68,7 @@ class PILTests(unittest.TestCase):
         for thread in threads: thread.join()
         self.assertEqual(errors, [])
         with ProjectIntelligence(concurrent_path)._session() as connection:
-            self.assertEqual(connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 5)
+            self.assertEqual(connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0], 6)
 
     def test_investigation_lifecycle_and_audit_terminal_state(self):
         agent = self.database.register_agent(self.project["id"], "owner", "investigator",

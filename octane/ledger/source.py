@@ -28,7 +28,7 @@ LANGUAGES = {
     ".vue": "vue", ".svelte": "svelte", ".ex": "elixir", ".exs": "elixir", ".erl": "erlang", ".hrl": "erlang",
     ".clj": "clojure", ".cljs": "clojure", ".cljc": "clojure", ".hs": "haskell", ".lhs": "haskell",
     ".elm": "elm", ".r": "r", ".R": "r", ".jl": "julia", ".m": "objective_c_or_matlab",
-    ".mm": "objective_c", ".scala": "scala", ".groovy": "groovy", ".gradle": "groovy",
+    ".mm": "objective_c", ".groovy": "groovy", ".gradle": "groovy",
     ".d": "d", ".di": "d", ".zig": "zig", ".nim": "nim", ".nims": "nim",
     ".cr": "crystal", ".cob": "cobol", ".cbl": "cobol", ".ada": "ada", ".adb": "ada", ".ads": "ada",
     ".pas": "pascal", ".pp": "pascal", ".ml": "ocaml", ".mli": "ocaml", ".re": "reason", ".rei": "reason",

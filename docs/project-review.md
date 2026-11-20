@@ -2,6 +2,28 @@
 
 Octane combines local evidence, source analysis, saved investigations, and Docker validation in one plugin. The root skill is the single workflow entry point. Source analysis is shared by the CLI and OpenClaw tools.
 
+## November 20, 2026 upgrade
+
+The full requested roadmap now shares the existing twelve tool names, one source analyzer, one skill, and the established execution boundary. It adds stdio MCP, operator-configured Python/TypeScript language servers, structured reports and line coverage, bounded mutation experiments, Hypothesis/fast-check probes, GitHub and SARIF evidence, container-backed bisect, Sentry/OTEL file imports, offline in-toto DSSE signatures, rootless Podman/runsc adapters, and a local historical evaluation harness. [Configuration and limits](integrations.md).
+
+The proposal gate protects original tests through read-only overlays and requires an explicit flag plus rationale for test-like edits. Mutation scores attached to proposals are computed from underlying matched execution records. Secret snapshot filters, Windows UID/GID refusal, POSIX private storage modes, the MIT license, no-reply commit metadata, curated lint, coverage gates, pinned Actions, and Dependabot address the hardening review.
+
+Live validation: 171 Python tests passed with two expected dependency-absence skips, including Docker, optional Tree-sitter, Pyright, TypeScript language server, Hypothesis, fast-check, and offline Ed25519 signatures. All 46 checkout CLI tests passed in Python 3.9. Five Node tests passed, including actual MCP SDK clients. OpenClaw 2026.11.3 loaded twelve tools and discovered one eligible Octane skill in an isolated configuration. A clean wheel installation initialized both stores and scanned a project. The [Blinker historical replay](evaluation.md) resolved one supplied maintainer patch with its affected file ranked first; this is not a general accuracy estimate.
+
+Podman/runsc were not installed on this host; their policy and argument tests use controlled runners. GitHub write integration tests use canned transport responses. Current CI results must be checked on the new PR; the older CI results below describe prior releases.
+
+### SQL and exception audit
+
+The no-Docker coverage run passed 171 tests with ten integration/dependency skips, reaching 78% overall coverage and 100% for `experiments.py`. CI enforces floors of 69% overall and 85% for the proposal gate.
+
+Native SQL values use bound placeholders. The interpolated identifiers in `db_graph.py` come from fixed path/language fields, fixed source/target choices, or fixed predicates; search values remain bound. `db.py` invalidation statements use fixed identifiers and bound paths; transaction savepoints use generated UUID names. Portable ledger queries concatenate fixed predicates or generated placeholder counts with separately bound values. No reviewed statement inserts a caller-supplied SQL identifier.
+
+Broad catches in native database transactions, workspace creation cleanup, and portable ledger writes roll back or remove partial state and immediately re-raise. The bridge's outer catch deliberately converts an error into its JSON protocol response. Optional parser catches were narrowed to known API/parse/ABI failure classes, with explicit static fallback coverage. No transaction error is converted into a passing run.
+
+The scanner now separates snapshot reading and consistency verification; investigation validation and adjacency construction are extracted; execution option validation, engine selection, and container argument construction are separate. `db_schema.py`, `db_support.py`, and `db_graph.py` divide native persistence concerns; `bridge_support.py` and `bridge_workspace.py` divide tool handlers. These retain the existing transactions and public APIs.
+
+The sections below retain the earlier defect history and release validation for comparison.
+
 ## Component map
 
 | Component | Responsibilities | State and boundaries |

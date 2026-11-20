@@ -8,6 +8,11 @@ from pathlib import Path
 from .db import ProjectIntelligence
 from .exploration import ExplorationProfile, PythonAdapter, Tentacle
 from .scanner import ProjectScanner
+from .reports import FORMATS, import_report
+from .github import GitHubIntegration
+from .provenance import sign_statement, statement, verify_envelope
+from .bisect import bisect_project
+from .evaluation import evaluate_dataset
 
 
 def main() -> None:
@@ -20,9 +25,54 @@ def main() -> None:
     scan = commands.add_parser("scan", help="scan source files and update the multilingual project graph")
     scan.add_argument("project_id")
     scan.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
+    report = commands.add_parser("import-report", help="import tests, coverage, SARIF, mutation, or telemetry evidence")
+    report.add_argument("project_id")
+    report.add_argument("path")
+    report.add_argument("--format", choices=sorted(FORMATS), required=True)
+    report.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
+    github = commands.add_parser("github", help="import GitHub issues or CI evidence and explicitly publish summaries")
+    github.add_argument("project_id")
+    github.add_argument("repository")
+    target = github.add_mutually_exclusive_group(required=True)
+    target.add_argument("--issue", type=int)
+    target.add_argument("--workflow", type=int)
+    target.add_argument("--pull-request", type=int)
+    target.add_argument("--check-commit")
+    github.add_argument("--evidence", default="")
+    github.add_argument("--publish", action="store_true")
+    github.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
+    provenance = commands.add_parser("provenance", help="export an in-toto proposal statement and optionally sign it")
+    provenance.add_argument("project_id")
+    provenance.add_argument("evidence_id")
+    provenance.add_argument("--key", type=Path)
+    provenance.add_argument("--output", type=Path, required=True)
+    provenance.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
+    verify = commands.add_parser("verify-provenance", help="verify a DSSE envelope against a selected trusted public key")
+    verify.add_argument("envelope", type=Path)
+    verify.add_argument("--public-key", type=Path, required=True)
+    verify.add_argument("--patch-sha256")
+    bisect = commands.add_parser("bisect", help="bisect a local Git history using isolated container checks")
+    bisect.add_argument("project_id")
+    bisect.add_argument("good")
+    bisect.add_argument("bad")
+    bisect.add_argument("--command-json", required=True)
+    bisect.add_argument("--budget", type=int, default=20)
+    evaluation = commands.add_parser("evaluate", help="evaluate local SWE-bench-style cases and supplied patches")
+    evaluation.add_argument("project_id")
+    evaluation.add_argument("dataset")
+    evaluation.add_argument("--limit", type=int, default=5)
+    for command in (bisect, evaluation):
+        command.add_argument("--image", required=True)
+        command.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
+        command.add_argument("--workspace-root", type=Path, required=True)
+        command.add_argument("--container-engine", choices=("docker", "podman"), default="docker")
+        command.add_argument("--container-runtime", choices=("runsc",))
     demo = commands.add_parser("demo", help="run a disposable database and source-analysis demonstration")
     demo.add_argument("--database", type=Path, help="retain demo database at this path")
     args = parser.parse_args()
+    if args.command == "verify-provenance":
+        print(json.dumps(verify_envelope(json.loads(args.envelope.read_text()), args.public_key, args.patch_sha256), indent=2))
+        return
     if args.command == "demo" and args.database is None:
         import tempfile
         with tempfile.TemporaryDirectory(prefix="octane-pil-demo-") as temp:
@@ -39,6 +89,40 @@ def main() -> None:
         if project is None:
             parser.error(f"unknown project: {args.project_id}")
         print(json.dumps(ProjectScanner().scan(intelligence, args.project_id), indent=2))
+    elif args.command == "import-report":
+        actor = intelligence.get_or_register_agent(args.project_id, "report-importer", "report observer", [], ["write_evidence"])
+        print(json.dumps(import_report(intelligence, args.project_id, actor["id"], args.path, args.format), indent=2))
+    elif args.command == "github":
+        actor = intelligence.get_or_register_agent(args.project_id, "github-integration", "remote observer", [], ["write_evidence"])
+        integration = GitHubIntegration(intelligence, args.project_id, actor["id"])
+        if args.issue is not None:
+            result = integration.issue(args.repository, args.issue)
+        elif args.workflow is not None:
+            result = integration.workflow(args.repository, args.workflow)
+        else:
+            result = integration.publish(args.repository, [item for item in args.evidence.split(",") if item],
+                                         pull_request=args.pull_request, head_sha=args.check_commit, approved=args.publish)
+        print(json.dumps(result, indent=2))
+    elif args.command == "provenance":
+        value = statement(intelligence, args.project_id, args.evidence_id)
+        if args.key is not None:
+            value = sign_statement(value, args.key)
+        from .ledger.core import _atomic_json
+
+        _atomic_json(args.output, value)
+        print(json.dumps({"path": str(args.output), "signed": args.key is not None}))
+    elif args.command in {"bisect", "evaluate"}:
+        from .workspace import WorkspaceManager
+
+        manager = WorkspaceManager(intelligence, args.workspace_root, container_engine=args.container_engine,
+                                   container_runtime=args.container_runtime)
+        actor = intelligence.get_or_register_agent(args.project_id, "evaluation-runner", "runtime observer", [], ["write_evidence"])
+        if args.command == "bisect":
+            result = bisect_project(manager, args.project_id, args.good, args.bad, json.loads(args.command_json),
+                                    args.image, actor["id"], args.budget)
+        else:
+            result = evaluate_dataset(manager, args.project_id, args.dataset, args.image, actor["id"], args.limit)
+        print(json.dumps(result, indent=2))
     else:
         print(json.dumps(run_demo(intelligence), indent=2))
 

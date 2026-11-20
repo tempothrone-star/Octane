@@ -6,7 +6,17 @@ Ask **“Fix a bug.”** The workflow finds a baseline check, looks for evidence
 
 ## Install
 
-Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on the Gateway host. Docker is used for isolated execution.
+Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on the Gateway host. Docker is used for isolated execution; rootless Podman and configured gVisor adapters are also available.
+
+
+| Component | Compatibility |
+| --- | --- |
+| OpenClaw | Declared minimum 2026.5.17; runtime checked on 2026.11.3 |
+| Node.js | `^24.22.1` or `>=26.12.1`; checked on 26.13.0 |
+| Python package, native tools, MCP bridge | 3.11+ |
+| Checkout-only `scripts/octane.py` ledger/static CLI | 3.9+, standard library; Python 3.9 cannot pip-install this package |
+| Execution | Local approved Docker images; rootless Podman/runsc adapters require deployment validation |
+| Host platforms | Linux tested; POSIX state modes applied; Windows profile permissions and explicit container-user opt-in |
 
 From this checkout:
 
@@ -43,7 +53,7 @@ Saved investigations carry evidence references, revision information, and explor
 
 ## Function graphs and runtime traces
 
-- Python analysis uses its built-in AST and lexical scopes. The optional Tree-sitter extra adds syntax-level call candidates across languages including C, C++, C#, Go, Java, JavaScript, PHP, Ruby, Rust, and TypeScript.
+- Optional operator-configured Pyright and TypeScript language servers provide semantic call hierarchy with labeled static fallback. Python analysis also uses its built-in AST and lexical scopes. The optional Tree-sitter extra adds syntax-level call candidates across languages including C, C++, C#, Go, Java, JavaScript, PHP, Ruby, Rust, and TypeScript.
 - Runtime probes support Python calls and exception locations, Node.js sampling, Ruby method calls, GDB traces for debug binaries, and compatible Speedscope profiles.
 - File and import graphs cover additional language families. Configure custom suffixes and import forms with a data-only `.octane/languages.json`.
 
@@ -57,7 +67,7 @@ Coverage depends on grammar, scan budget, and the executed input. Use the report
 
 ## Command-line tools
 
-Use `python3 scripts/octane.py --help` from this checkout or `python3 -m octane --help`. Installing the Python package also provides the `octane` command. The local ledger and static analysis commands work with Python 3.9+ and the standard library. The packaged native engine and optional parser require Python 3.11+.
+Use `python3 scripts/octane.py --help` from this checkout or `python3 -m octane --help`. Installing the Python package also provides the `octane` command. From a source checkout, `scripts/octane.py` ledger and static commands work with Python 3.9+ and the standard library. Installing with pip, native tools, and optional extras require Python 3.11+.
 
 To analyze another checkout, set `OCTANE_CLI` to the absolute path of this repository's `scripts/octane.py` and run commands with the target checkout as the working directory.
 
@@ -78,9 +88,47 @@ Replace `EV-0001` with the returned evidence ID. Use `languages` for source inve
 
 `octane native --help` exposes the existing Gateway database registration, scanning, and demonstration commands.
 
+## Evidence and integrations
+
+The same twelve tools are available through `octane-mcp` over stdio. Optional integrations add semantic Python/TypeScript edges, structured test and line-coverage reports, SARIF, mutation experiments, Hypothesis/fast-check probes, Git bisect, GitHub issue/CI evidence, Sentry/OTEL imports, offline signed in-toto provenance, and local SWE-bench-style replay. Setup, exact actions, dependencies, and verification limits are in the [integration guide](docs/integrations.md).
+
+Candidate runs execute original baseline checks through read-only overlays. Proposals reject test edits unless an explicit flag and rationale are recorded. A matched reproduction, preservation checks, current intent evidence, image identity, and source hashes remain required. Mutation evidence can test whether selected source reversions recreate the failure.
+
+```mermaid
+flowchart LR
+    Intent[Tests, documentation, callers] --> Investigate[Trace and investigate]
+    Graph[Semantic or labeled static graph] --> Investigate
+    Investigate --> Baseline[Failing baseline and passing preservation]
+    Baseline --> Candidate[Small candidate in disposable sandbox]
+    Candidate --> Checks[Original tests, reports, optional mutations]
+    Checks --> Proposal[Evidence-linked patch for review]
+```
+
+For example, the numeric repair fixture preserves the missing-input sentinel while correcting zero:
+
+```diff
+ def normalize(value):
+-    return value or None
++    return value
+```
+
+Before: `calculate(0)` returns `-1`. After: it returns `0`; `calculate(None)` still returns the documented `-1`. The container demonstration checks the focused failure and neighboring behavior. The public [Blinker replay](docs/evaluation.md) separately validates the harness against a historical maintainer fix.
+
+A real `status --human` run after recording one source observation produced the following excerpt (identity/path/hash fields omitted):
+
+```text
+open_investigations: 0
+stale_or_needs_review_claims: 0
+asserted_claims: 0
+unverified_evidence: 1
+log_integrity:
+valid: True
+  events: 3
+```
+
 ## Storage and upgrades
 
-New project-local ledger records use `.octane/ledger.db` with `project.json` and `config.json`. Gateway investigations use `pil.sqlite3` and disposable workspaces under `$OPENCLAW_STATE_DIR/octane`, or `~/.openclaw/octane` when the variable is unset. Keep Gateway storage outside analyzed checkouts.
+New project-local ledger records use `.octane/ledger.db` with `project.json` and `config.json`. Gateway investigations use `pil.sqlite3` and disposable workspaces under `$OPENCLAW_STATE_DIR/octane`, or `~/.openclaw/octane` when the variable is unset. Keep Gateway storage outside analyzed checkouts. POSIX state directories are private (0700) and database/metadata files use 0600; Windows relies on user-profile access controls.
 
 Existing `.octance/octance.db` ledgers are opened in place with their records and event hashes preserved. The old `scripts/octance.py` entry point and `OCTANCE_AGENT` variable remain compatibility aliases. If a checkout contains both old and new ledger state, Octane reports a conflict so the active records can be selected explicitly. Upgrade the linked plugin and refresh the skill catalog to replace the former `octance` skill name.
 
@@ -93,4 +141,4 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
 npm test
 ```
 
-[CI](.github/workflows/tests.yml) exercises the local CLI on Python 3.9, the full suite on Python 3.11, 3.12, and 3.14, optional parsing, Node bridge and packaging, and a Docker repair demonstration. See the [architecture](docs/architecture.md), [workflow](docs/openclaw.md), and [implementation limits](docs/implementation-and-limitations.md).
+[CI](.github/workflows/tests.yml) exercises the local CLI on Python 3.9, the full suite on Python 3.11, 3.12, and 3.14, optional parsing, Node bridge and packaging, Docker repair/mutation/bisect/report/property checks, live language servers, offline signature tests, curated lint, and coverage gates. See the [architecture](docs/architecture.md), [workflow](docs/openclaw.md), and [implementation limits](docs/implementation-and-limitations.md).

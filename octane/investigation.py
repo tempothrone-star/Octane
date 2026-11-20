@@ -15,6 +15,34 @@ def context_evidence_ids(context):
     return {item for item in identifiers if isinstance(item, str)} if isinstance(identifiers, list) else set()
 
 
+def _validate_exploration(node_budget, depth_limit, time_budget_seconds, direction, relationships):
+    if type(node_budget) is not int or not 1 <= node_budget <= 100:
+        raise ValueError("nodeBudget must be an integer from 1 to 100")
+    if type(depth_limit) is not int or not 0 <= depth_limit <= 10:
+        raise ValueError("depthLimit must be an integer from 0 to 10")
+    if isinstance(time_budget_seconds, bool) or not math.isfinite(time_budget_seconds) or not 0.1 <= time_budget_seconds <= 60:
+        raise ValueError("timeBudgetSeconds must be finite and from 0.1 to 60")
+    if direction not in {"incoming", "outgoing", "both"}:
+        raise ValueError("direction must be incoming, outgoing, or both")
+    relationships = relationships if relationships is not None else ["calls", "imports", "defines"]
+    if not isinstance(relationships, list) or not relationships or set(relationships) - {"calls", "imports", "defines", "depends_on", "tests", "documents", "related_to"}:
+        raise ValueError("unsupported exploration relationships")
+    return relationships
+
+
+def _adjacency(graph, nodes, by_id, relationships, direction):
+    adjacency = {key: [] for key in nodes}
+    for edge in graph["edges"]:
+        if edge["kind"] not in relationships or edge["source_id"] not in by_id or edge["target_id"] not in by_id:
+            continue
+        source, target = by_id[edge["source_id"]]["node_key"], by_id[edge["target_id"]]["node_key"]
+        if direction in {"outgoing", "both"}:
+            adjacency[source].append({"node_key": target, "kind": edge["kind"], "direction": "outgoing", "edge_id": edge["id"]})
+        if direction in {"incoming", "both"}:
+            adjacency[target].append({"node_key": source, "kind": edge["kind"], "direction": "incoming", "edge_id": edge["id"]})
+    return adjacency
+
+
 class InvestigationWorkflow:
     def __init__(self, intelligence: ProjectIntelligence):
         self.intelligence = intelligence
@@ -22,17 +50,7 @@ class InvestigationWorkflow:
     def explore(self, project_id, investigation_id, agent_id, *, exploration_id=None,
                 starting_nodes=None, relationships=None, direction="outgoing", depth_limit=2,
                 node_budget=20, time_budget_seconds=10, weights=None):
-        if type(node_budget) is not int or not 1 <= node_budget <= 100:
-            raise ValueError("nodeBudget must be an integer from 1 to 100")
-        if type(depth_limit) is not int or not 0 <= depth_limit <= 10:
-            raise ValueError("depthLimit must be an integer from 0 to 10")
-        if isinstance(time_budget_seconds, bool) or not math.isfinite(time_budget_seconds) or not 0.1 <= time_budget_seconds <= 60:
-            raise ValueError("timeBudgetSeconds must be finite and from 0.1 to 60")
-        if direction not in {"incoming", "outgoing", "both"}:
-            raise ValueError("direction must be incoming, outgoing, or both")
-        relationships = relationships if relationships is not None else ["calls", "imports", "defines"]
-        if not isinstance(relationships, list) or not relationships or set(relationships) - {"calls", "imports", "defines", "depends_on", "tests", "documents", "related_to"}:
-            raise ValueError("unsupported exploration relationships")
+        relationships = _validate_exploration(node_budget, depth_limit, time_budget_seconds, direction, relationships)
         scheduler = ExplorationScheduler(weights)
         started = time.monotonic()
         with self.intelligence._transaction() as db:
@@ -76,15 +94,7 @@ class InvestigationWorkflow:
                            "objective": investigation["objective"], "weights": scheduler.weights}
                 db.execute("INSERT INTO exploration_runs VALUES(?,?,?,?,?,?,?,?,?)",
                            (exploration_id, project_id, investigation_id, revision, json.dumps(profile), json.dumps(state), "active", agent_id, _now()))
-            adjacency = {key: [] for key in nodes}
-            for edge in graph["edges"]:
-                if edge["kind"] not in relationships or edge["source_id"] not in by_id or edge["target_id"] not in by_id:
-                    continue
-                source, target = by_id[edge["source_id"]]["node_key"], by_id[edge["target_id"]]["node_key"]
-                if direction in {"outgoing", "both"}:
-                    adjacency[source].append({"node_key": target, "kind": edge["kind"], "direction": "outgoing", "edge_id": edge["id"]})
-                if direction in {"incoming", "both"}:
-                    adjacency[target].append({"node_key": source, "kind": edge["kind"], "direction": "incoming", "edge_id": edge["id"]})
+            adjacency = _adjacency(graph, nodes, by_id, relationships, direction)
             queue, visited, discoveries = deque(state["queue"]), set(state["visited"]), []
             queued = {item[0] for item in queue}
             while queue and len(discoveries) < node_budget and time.monotonic() - started < time_budget_seconds:

@@ -52,7 +52,7 @@ Set `pythonTrace: true` on a Docker workspace run such as `["python", "-B", "-m"
 
 - `openclaw/index.js` registers the optional tools using OpenClaw's [tool factory API](https://docs.openclaw.ai/plugins/building-plugins). It passes runtime agent IDs from the host context to the bridge. A model-supplied parameter cannot choose the runtime identity. Attribution identifies the OpenClaw agent and a permission-scoped bridge actor when available. Explicit OpenClaw tool policy remains the authorization boundary.
 - `octane/scanner.py` uses the shared `octane/ledger/` parser. It persists multilingual file dependencies, Python call candidates resolved from lexical scopes and imports, and syntax-level function and call candidates for the supported Tree-sitter grammars when the optional backend is installed. Run an explicit scan after upgrading to rebuild saved graph edges with the new resolver.
-- `octane/investigation.py` stores exploration frontier and evidence atomically, and `octane/db.py` migrates the existing PIL database to schema 5. Existing evidence, checkpoints, and graph history are retained.
+- `octane/investigation.py` stores exploration frontier and evidence atomically, and `octane/db.py` with `db_schema.py` migrates the existing PIL database to schema 6. Existing evidence, checkpoints, and graph history are retained.
 - `octane/workspace.py` copies an approved project, excludes common credential paths, and keeps an unmounted baseline. Docker receives only the disposable copy, the selected local image, and an explicit command. The container has networking disabled, resource limits, and a timeout. Keep credentials outside the source tree. The Docker daemon and approved images are trusted infrastructure.
 - Native evidence verification requires a separate recorded passing run on an unchanged snapshot at the current indexed revision. A passing command establishes the behavior it actually checked. Octane leaves semantic interpretation to the investigator.
 - The agent judges intent and causation from the evidence. Runtime coverage follows the selected probe and tracer. For another process or runtime, use a profiler with source-backed Speedscope output.
@@ -68,3 +68,9 @@ npm test
 ```
 
 The packaged plugin registered twelve optional tools under the [OpenClaw tool plugin contract](https://docs.openclaw.ai/plugins/tool-plugins) when inspected with OpenClaw 2026.11.3. Local bridge checks and the Docker demonstration require no model credentials.
+
+## Extended evidence workflows
+
+All twelve tool names remain shared between OpenClaw and MCP. Workspace actions now include `mutate`, `property`, `bisect`, and `evaluate`; evidence actions include report `import` and unsigned provenance `attest`. See the [integration guide](integrations.md) for schemas, examples, dependencies, and limits. Candidate executions overlay the original tests, and proposals touching tests require an explicit flag and recorded rationale. Runtime reports must be available when requested; matching failed test IDs must pass in the candidate.
+
+Database helpers/schema/graph queries live in `db_support.py`, `db_schema.py`, and `db_graph.py`; workspace tool handlers live in `bridge_workspace.py`. They share the existing transaction and allowlist boundaries.

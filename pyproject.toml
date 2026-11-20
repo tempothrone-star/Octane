@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,13 +8,17 @@ version = "0.1.0"
 description = "Internal Python and SQLite engine for the Octane OpenClaw plugin"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = []
 
 [project.scripts]
 octane = "octane.__main__:main"
 
 [project.optional-dependencies]
+dev = ["ruff==0.17.6", "coverage==7.17.3"]
+provenance = ["cryptography>=46,<51"]
+testing = ["hypothesis>=6.140,<7"]
 ast = ["tree-sitter-languages==1.10.2", "tree-sitter==0.21.3"]
 
 [tool.setuptools.packages.find]
@@ -23,3 +27,10 @@ include = ["octane*"]
 [tool.setuptools.package-data]
 octane = ["*.cjs", "*.rb"]
 "octane.ledger" = ["migrations/*.sql"]
+
+[tool.ruff]
+target-version = "py39"
+exclude = ["build", "node_modules"]
+
+[tool.ruff.lint]
+select = ["F", "B", "S102", "S306", "S307"]

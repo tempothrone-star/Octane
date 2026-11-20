@@ -19,13 +19,20 @@
     "references/*.md",
     "octane/ledger/*.py",
     "octane/ledger/migrations/*.sql",
-    "scripts/octane.py"
+    "scripts/octane.py",
+    "LICENSE",
+    "SECURITY.md",
+    "CONTRIBUTING.md",
+    "mcp/*.js",
+    "examples/*.jsonl"
   ],
   "scripts": {
     "test": "node --test tests/*.test.js",
     "test:python": "python3 -m unittest discover -s tests -v"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ajv": "^8.20.0",
     "typebox": "^1.4.3"
   },
   "peerDependencies": {
@@ -50,5 +57,9 @@
     "openclaw": {
       "optional": true
     }
+  },
+  "license": "MIT",
+  "bin": {
+    "octane-mcp": "mcp/server.js"
   }
 }

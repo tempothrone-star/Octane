@@ -2,6 +2,11 @@
   "name": "octane-openclaw",
   "version": "1.0.0",
   "private": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tempothrone-star/Octane.git"
+  },
+  "homepage": "https://github.com/tempothrone-star/Octane#readme",
   "description": "Octane project intelligence, function tracing, and evidence-driven repairs for OpenClaw and MCP",
   "type": "module",
   "files": [
@@ -49,6 +54,9 @@
     "runtimeExtensions": [
       "./openclaw/index.js"
     ],
+    "build": {
+      "openclawVersion": "2026.11.3"
+    },
     "compat": {
       "pluginApi": ">=2026.5.17",
       "minGatewayVersion": "2026.5.17"

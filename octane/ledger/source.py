@@ -108,11 +108,11 @@ EXCLUDED_DIRS = {
 # ranking never treats a frame as proof of causation.
 _FRAME_PATTERNS = (
     re.compile(r'File ["\'](?P<path>[^"\']+)["\'], line (?P<line>\d+)(?:, in (?P<symbol>[^\r\n]+))?'),  # Python
-    re.compile(r"\bat (?:(?P<symbol>[^\r\n(]+) \()? (?P<path>(?:file://)?[^\s()]+?\.(?:m?js|cjs|jsx|tsx?|mts|cts)):(?P<line>\d+):(?P<column>\d+)\)?", re.X),  # JS/TS
-    re.compile(r"\bat [^\r\n(]+\((?P<path>[^()]+?\.java):(?P<line>\d+)\)"),  # Java
-    re.compile(r"(?P<path>(?:[A-Za-z]:)?[^\s()]+?\.go):(?P<line>\d+)(?::\d+)?(?:\s|$)"),  # Go
+    re.compile(r"\bat (?:(?P<symbol>[^\r\n(]{1,200}) \()?\s*(?P<path>(?:file://)?[^\s()]+?\.(?:m?js|cjs|jsx|tsx?|mts|cts)):(?P<line>\d+):(?P<column>\d+)\)?"),  # JS/TS
+    re.compile(r"\bat [^\r\n(]{1,200}\((?P<path>[^()]+?\.java):(?P<line>\d+)\)"),  # Java
+    re.compile(r"(?<![^\s()])(?P<path>(?:[A-Za-z]:)?[^\s()]+?\.go):(?P<line>\d+)(?::\d+)?(?:\s|$)"),  # Go
     re.compile(r"\bat (?P<path>(?:\./|/|[^\s]+/)[^\s:]+\.rs):(?P<line>\d+)(?::(?P<column>\d+))?"),  # Rust
-    re.compile(r"(?P<path>(?:[A-Za-z]:)?[^\s()]+?\.(?:c|h|cc|hh|cpp|hpp|cxx|hxx)):(?P<line>\d+)(?::\d+)?(?::|\s)"),  # C/C++
+    re.compile(r"(?<![^\s()])(?P<path>(?:[A-Za-z]:)?[^\s()]+?\.(?:c|h|cc|hh|cpp|hpp|cxx|hxx)):(?P<line>\d+)(?::\d+)?(?::|\s)"),  # C/C++
 )
 
 _FRAME_FORMATS = ("python", "javascript", "java", "go", "rust", "c_cpp")
@@ -125,8 +125,8 @@ def _generic_frame_patterns(extensions: Tuple[str, ...]) -> Tuple[re.Pattern[str
     suffixes = "|".join(re.escape(item.lstrip(".")) for item in extensions)
     extension = r"(?:%s)" % suffixes
     return (
-        re.compile(r"(?P<path>(?:[A-Za-z]:)?[^()\s:]+?\." + extension + r"):(?P<line>\d+)(?::\d+)?(?:\)|\s|$)"),
-        re.compile(r"(?P<path>[^()\s]+?\." + extension + r")\((?P<line>\d+)(?:,\d+)?\)"),
+        re.compile(r"(?<![^\s()])(?P<path>(?:[A-Za-z]:)?[^()\s:]+?\." + extension + r"):(?P<line>\d+)(?::\d+)?(?:\)|\s|$)"),
+        re.compile(r"(?<![^\s()])(?P<path>[^()\s]+?\." + extension + r")\((?P<line>\d+)(?:,\d+)?\)"),
     )
 
 
@@ -220,7 +220,11 @@ def parse_stack_frames(text: str, root: Path) -> List[Dict[str, Any]]:
     seen = set()
     extensions = tuple(sorted({extension.lower() for extension in LANGUAGES}, key=lambda item: (-len(item), item)))
     patterns = _FRAME_PATTERNS + _generic_frame_patterns(extensions)
-    for line_text in text.splitlines():
+    for line_text in text[:1_000_000].splitlines()[:10000]:
+        if len(line_text) > 1024:
+            continue
+        if len(frames) >= 1000:
+            break
         for pattern_index, pattern in enumerate(patterns):
             match = pattern.search(line_text)
             if not match:

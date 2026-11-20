@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import ast
+from .python_syntax import parse_python
 import hashlib
-import warnings
 from functools import lru_cache
 
 from .ledger import ast_backend
@@ -22,8 +22,8 @@ QUERIES = {
 def _python_fallback(text):
     result = []
     try:
-        tree = ast.parse(text)
-    except (SyntaxError, ValueError, RecursionError):
+        tree = parse_python(text)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return [], 'syntax_error'
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -45,13 +45,9 @@ def _matches(language, text):
     if tree.root_node.has_error:
         return [], 'syntax_error'
     try:
-        from tree_sitter_languages import get_language
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            provider = get_language(grammar)
         results = []
         for rule, query in QUERIES.get(language, []):
-            for node, _ in provider.query(query).captures(tree.root_node):
+            for node, _ in ast_backend.query_captures(grammar, query, tree.root_node):
                 if rule == 'empty-catch' and node.named_child_count:
                     continue
                 results.append((rule, node.start_point[0] + 1))

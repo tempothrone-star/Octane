@@ -29,14 +29,9 @@ def _sanitize_repository_url(value: str) -> str:
 
 
 def _scrub_sensitive_text(value: str) -> str:
-    """Redact common bearer/basic-auth and assignment secrets before persistence."""
-    import re
-    value = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", "[REDACTED PRIVATE KEY]", value, flags=re.S)
-    value = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*", "Bearer [REDACTED]", value)
-    value = re.sub(r"(?i)(://)[^/@:\s]+:[^/@\s]+@", r"\1[REDACTED]@", value)
-    value = re.sub(r"(?i)((?:[A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|credential|private[_-]?key)[A-Za-z0-9_-]*)\s*[:=]\s*)([^\s,;]+)", r"\1[REDACTED]", value)
-    value = re.sub(r"(?i)\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b", "[REDACTED TOKEN]", value)
-    return value
+    from .redaction import scrub_text
+    return scrub_text(value)
+
 
 def _git_remote_url(root: Path) -> str | None:
     try:

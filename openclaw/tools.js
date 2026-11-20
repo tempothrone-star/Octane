@@ -167,7 +167,7 @@ export const tools = [
     catalogMode: "direct-only",
     description: "Create disposable snapshots, inspect or propose patches, and run checks inside approved Docker images. Plot Python, GDB-native, Node, Ruby, or Speedscope runtime stacks.",
     parameters: schema({
-      action: action("create", "patch", "compare", "run", "destroy", "propose", "mutate", "property", "bisect", "evaluate", "benchmark"), projectId: optional(Type.String()),
+      action: action("create", "patch", "remove", "compare", "run", "destroy", "propose", "mutate", "property", "bisect", "evaluate", "benchmark"), projectId: optional(Type.String()),
       workspaceId: optional(Type.String()), mode: optional(action("observation", "experimentation")),
       relativePath: optional(Type.String()), content: optional(Type.String()), command: optional(stringArray),
       image: optional(Type.String()), timeoutSeconds: optional(Type.Integer({ minimum: 1, maximum: 300 })),
@@ -194,7 +194,7 @@ export const tools = [
       datasetPath: optional(Type.String()), caseLimit: optional(Type.Integer({ minimum: 1, maximum: 100 })),
     }),
     guidance: "Use one trace per run. Choose pythonTrace, nativeTraceSymbols in an approved GDB image, runtimeTrace node or ruby for direct commands, or runtimeTrace speedscope for a profiler writing to OCTANE_TRACE_PATH. Pair original and candidate checks with identical trace settings.",
-    operation: (p) => ({ create: "workspace_create", patch: "workspace_patch", compare: "workspace_compare", run: "workspace_run", destroy: "workspace_destroy", propose: "workspace_propose", mutate: "workspace_mutate", property: "workspace_property", bisect: "workspace_bisect", evaluate: "workspace_evaluate", benchmark: "workspace_benchmark" })[p.action],
+    operation: (p) => ({ create: "workspace_create", patch: "workspace_patch", remove: "workspace_remove", compare: "workspace_compare", run: "workspace_run", destroy: "workspace_destroy", propose: "workspace_propose", mutate: "workspace_mutate", property: "workspace_property", bisect: "workspace_bisect", evaluate: "workspace_evaluate", benchmark: "workspace_benchmark" })[p.action],
   },
 ];
 

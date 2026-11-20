@@ -6,6 +6,7 @@ recognized with small conservative patterns; this is not a full grammar parser.
 from __future__ import annotations
 
 import ast
+from ..python_syntax import parse_python
 import posixpath
 import re
 from pathlib import Path, PurePosixPath
@@ -339,8 +340,8 @@ def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
 
 def _python_imports(path: str, text: str) -> Tuple[List[Tuple[str, int, int, bool]], int]:
     try:
-        tree = ast.parse(text, filename=path)
-    except (SyntaxError, ValueError):
+        tree = parse_python(text, filename=path)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return [], 1
     results: List[Tuple[str, int, int, bool]] = []
     group = 0

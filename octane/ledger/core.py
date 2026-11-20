@@ -35,10 +35,7 @@ ROLE_PERMISSIONS = {
     "documenter": {"evidence.add", "evidence.read", "evidence.search", "claim.add", "claim.read", "claim.search", "claim.transition", "brief", "status"},
     "admin": {"*"},
 }
-_SECRET_KEY = re.compile(r"(?i)(password|passwd|secret|token|api[_-]?key|credential|private[_-]?key)")
-_SECRET_ASSIGNMENT = re.compile(r"(?i)((?:[A-Za-z0-9_-]*(?:password|passwd|secret|token|api[_-]?key|credential)[A-Za-z0-9_-]*)\s*[:=]\s*)([^\s,;]+)")
-_SECRET_TOKEN = re.compile(r"(?i)(?:\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[A-Z0-9]{16})\b|\bBearer\s+[A-Za-z0-9._~+/-]+=*|(?<=://)[^/@:\s]+:[^/@\s]+@)")
-_PRIVATE_KEY = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S)
+from ..redaction import SECRET_KEY as _SECRET_KEY, scrub_text
 _EXCLUDED_DIRS = {".git", ".octane", ".octance", "__pycache__", ".venv", "venv", "node_modules", "dist", "build", ".tox"}
 
 
@@ -85,18 +82,7 @@ def _redact(value: Any, count: List[int], key: str = "") -> Any:
         return [_redact(v, count, key) for v in value]
     if not isinstance(value, str):
         return value
-    def replace(match: re.Match) -> str:
-        count[0] += 1
-        return "[REDACTED PRIVATE KEY]"
-    value = _PRIVATE_KEY.sub(replace, value)
-    def replace_assignment(match: re.Match) -> str:
-        count[0] += 1
-        return match.group(1) + "[REDACTED]"
-    value = _SECRET_ASSIGNMENT.sub(replace_assignment, value)
-    def replace_token(_match: re.Match) -> str:
-        count[0] += 1
-        return "[REDACTED TOKEN]"
-    return _SECRET_TOKEN.sub(replace_token, value)
+    return scrub_text(value, count)
 
 
 def _atomic_json(path: Path, data: Any) -> None:
@@ -259,6 +245,8 @@ class Ledger:
                 except Exception:
                     conn.rollback()
                     raise
+            if self._schema_ready(conn):
+                return
             conn.execute("BEGIN IMMEDIATE")
             conn.execute("CREATE TABLE IF NOT EXISTS claim_status_events (id INTEGER PRIMARY KEY AUTOINCREMENT, claim_id TEXT NOT NULL REFERENCES claims(claim_id), previous_status TEXT NOT NULL, status TEXT NOT NULL CHECK (status IN ('asserted','corroborated','contradicted','stale','needs_review','retracted','quarantined')), agent_id TEXT NOT NULL REFERENCES agents(agent_id), created_at TEXT NOT NULL)")
             conn.execute("CREATE INDEX IF NOT EXISTS claim_status_events_claim ON claim_status_events(claim_id,id)")
@@ -285,6 +273,17 @@ class Ledger:
         finally:
             conn.close()
 
+    def _schema_ready(self, conn):
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        required = {'claim_status_events', 'octane_internal_schema', 'evidence_fts', 'claims_fts'}
+        if not required <= tables:
+            return False
+        row = conn.execute('SELECT version FROM octane_internal_schema LIMIT 1').fetchone()
+        if not row or row[0] != 2:
+            return False
+        self.fts5 = True
+        return True
+
     @staticmethod
     def next_id(conn: sqlite3.Connection, prefix: str) -> str:
         row = conn.execute("SELECT value FROM counters WHERE prefix=?", (prefix,)).fetchone()
@@ -296,11 +295,8 @@ class Ledger:
               request: Dict[str, Any], builder: Callable[[sqlite3.Connection, str], Dict[str, Any]],
               apply: Callable[[sqlite3.Connection, Dict[str, Any]], None],
               explicit_key: Optional[str] = None) -> Dict[str, Any]:
-        count = int(conn.execute("SELECT count(*) FROM event_log").fetchone()[0])
-        if count:
-            integrity = self.verify_log(project_id)
-            if not integrity["valid"]:
-                raise OctaneError("refusing to append to a damaged event log: " + integrity.get("reason", "integrity failure"), 1, "integrity_error")
+        from .append_integrity import verify_append
+        verify_append(conn, self.db_path.parent / 'project.json', project_id)
         request_json = canonical(request)
         key = explicit_key or _digest({"agent_id": agent_id, "op": op, "request": request})
         old = conn.execute("SELECT agent_id,op,payload_json FROM event_log WHERE idempotency_key=?", (key,)).fetchone()

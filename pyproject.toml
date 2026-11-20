@@ -19,9 +19,9 @@ octane = "octane.__main__:main"
 dev = ["ruff==0.17.6", "coverage==7.17.3", "radon==6.0.1"]
 provenance = ["cryptography>=46,<51"]
 testing = ["hypothesis>=6.140,<7"]
-# tree-sitter-languages 1.10.2 calls the pre-0.22 Language/Parser API.
-# Upgrade this tested pair together with the grammar-loader migration.
-ast = ["tree-sitter-languages==1.10.2", "tree-sitter==0.21.3"]
+# This release bundles grammars in wheels, including Python 3.13/3.14.
+# 1.x fetches grammars at runtime; keep analysis offline until that loader is reviewed.
+ast = ["tree-sitter-language-pack==0.13.0", "tree-sitter==0.25.2"]
 
 [tool.setuptools.packages.find]
 include = ["octane*"]

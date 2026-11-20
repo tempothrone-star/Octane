@@ -47,9 +47,9 @@ def evaluate_case(manager, project_id, case, image):
     revision = resolve_revision(root, case["base_commit"])
     focused = _command(case, "test_command", "FAIL_TO_PASS")
     preservation = _command(case, "preservation_command", "PASS_TO_PASS")
-    workspaces = []
+    workspaces, skipped_paths = [], []
     with tempfile.TemporaryDirectory(prefix="octane-evaluation-") as directory:
-        checkout = export_revision(root, revision, Path(directory) / "project")
+        checkout = export_revision(root, revision, Path(directory) / "project", skipped_paths=skipped_paths)
         if case.get("test_patch"):
             apply_patch(checkout, case["test_patch"])
         original = manager.create_workspace(project_id, "experimentation", source_root=checkout, source_revision=revision)
@@ -66,7 +66,7 @@ def evaluate_case(manager, project_id, case, image):
             expected = set(case.get("expected_files", []))
             rank = next((index for index, name in enumerate(ranked, 1) if name in expected), None)
             candidate_tree = Path(directory) / "candidate"
-            export_revision(root, revision, candidate_tree)
+            export_revision(root, revision, candidate_tree, skipped_paths=skipped_paths)
             if case.get("test_patch"):
                 apply_patch(candidate_tree, case["test_patch"])
             candidate = manager.create_workspace(project_id, "experimentation", source_root=candidate_tree, source_revision=revision)
@@ -80,7 +80,7 @@ def evaluate_case(manager, project_id, case, image):
                             for run in (baseline, before, after, preserved))
                         and all(run["test_integrity"] == baseline["test_integrity"] for run in (before, after, preserved)))
             return {"instance_id": case["instance_id"], "base_commit": revision, "resolved": resolved,
-                    "localization_rank": rank, "first_hypothesis_seconds": hypothesis_seconds, "ranked_files": ranked[:20], "image_id": immutable,
+                    "skipped_archive_paths": skipped_paths, "localization_rank": rank, "first_hypothesis_seconds": hypothesis_seconds, "ranked_files": ranked[:20], "image_id": immutable,
                     "baseline_run_id": baseline["run_id"], "candidate_run_id": after["run_id"],
                     "preservation_run_ids": [before["run_id"], preserved["run_id"]],
                     "evidence_ids": [run["evidence_id"] for run in (baseline, before, after, preserved)]}

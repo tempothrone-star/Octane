@@ -58,6 +58,7 @@ const spec = JSON.parse(SPEC);
 
 
 def property_command(root: Path, specification):
+    root = root.resolve()
     if not isinstance(specification, dict):
         raise ValueError("propertySpec must be an object")
     spec = dict(specification)

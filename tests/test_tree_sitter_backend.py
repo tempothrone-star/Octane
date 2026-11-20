@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 try:
-    import tree_sitter_languages  # noqa: F401
+    import tree_sitter_language_pack  # noqa: F401
 except ImportError:
     raise unittest.SkipTest("optional Tree-sitter extra is not installed") from None
 

@@ -37,7 +37,7 @@ def resolve_revision(repository, reference):
     return value
 
 
-def export_revision(repository, revision, destination: Path):
+def export_revision(repository, revision, destination: Path, *, skipped_paths=None):
     archive = git(repository, "archive", "--format=tar", revision)
     destination.mkdir(mode=0o700, parents=True, exist_ok=True)
     total, files = 0, 0
@@ -48,8 +48,12 @@ def export_revision(repository, revision, destination: Path):
                 raise ValueError("Git archive contains an unsafe path")
             if any(excluded_name(part) for part in relative.parts):
                 continue
+            if member.issym():
+                if skipped_paths is not None:
+                    skipped_paths.append({"path": member.name, "reason": "symlink omitted from isolated source archive"})
+                continue
             if not member.isfile() and not member.isdir():
-                raise ValueError("Git archive contains a symlink or special file")
+                raise ValueError("Git archive contains a special file")
             target = destination.joinpath(*relative.parts)
             if member.isdir():
                 target.mkdir(parents=True, exist_ok=True)

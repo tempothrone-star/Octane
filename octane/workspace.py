@@ -27,6 +27,7 @@ from .storage import private_directory
 from .test_protection import baseline_tests, is_test_path
 from .build_config import build_change_review, is_build_path
 from .reports import FORMATS, MAX_REPORT_BYTES, parse_report
+from .container_lifecycle import execution_guard, lifecycle_arguments, reap_expired, register_deadline
 
 
 class WorkspaceManager:
@@ -89,8 +90,9 @@ class WorkspaceManager:
         if workspace["mode"] != "experimentation":
             raise PermissionError("candidate patches require experimentation mode")
         path = self._safe_path(Path(workspace["path"]), relative_path)
-        if not path.is_file():
-            raise FileNotFoundError(relative_path)
+        if path.is_symlink() or (path.exists() and not path.is_file()):
+            raise ValueError("candidate path must be a regular file")
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
 
     def run_observation(self, workspace_id: str, command: list[str], image: str, timeout_seconds: int = 30,
@@ -118,6 +120,15 @@ class WorkspaceManager:
                                 native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace, report_format=report_format,
                                 allow_build_changes=allow_build_changes, build_changes_rationale=build_changes_rationale)
 
+    def remove_candidate_file(self, workspace_id, relative_path):
+        workspace = self._get(workspace_id)
+        if workspace['mode'] != 'experimentation':
+            raise PermissionError('candidate deletions require experimentation mode')
+        path = self._safe_path(Path(workspace['path']), relative_path)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('candidate deletion must name a regular file')
+        path.unlink()
+
     def compare_workspace(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._get(workspace_id)
         root = Path(workspace["path"])
@@ -134,7 +145,7 @@ class WorkspaceManager:
                 differences.append({"path": relative, "kind": "symlink"})
                 continue
             if not left.is_file() or not right.is_file():
-                differences.append({"path": relative, "kind": "added" if right.is_file() else "removed"})
+                differences.append(_file_change(relative, left, right))
                 continue
             if stat.S_IMODE(left.stat().st_mode) != stat.S_IMODE(right.stat().st_mode):
                 differences.append({"path": relative, "kind": "mode_changed"})
@@ -144,19 +155,7 @@ class WorkspaceManager:
             except OSError as exc:
                 raise OSError(f"could not compare workspace file {relative!r}: {exc}") from exc
             if a != b:
-                binary = False
-                try:
-                    if b"\0" in a or b"\0" in b or any(char in relative for char in "\n\r\t"):
-                        raise ValueError("path or contents cannot be represented safely in a text patch")
-                    lines = difflib.unified_diff(a.decode("utf-8").splitlines(True), b.decode("utf-8").splitlines(True),
-                                                 fromfile=f"a/{relative}", tofile=f"b/{relative}")
-                    diff = [line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in lines]
-                except ValueError:
-                    diff = []
-                    binary = True
-                differences.append({"path": relative, "kind": "modified", "binary": binary,
-                                    "original_sha256": hashlib.sha256(a).hexdigest(),
-                                    "workspace_sha256": hashlib.sha256(b).hexdigest(), "diff": "".join(diff)})
+                differences.append(_file_change(relative, left, right, a, b))
         return {"workspace_id": workspace_id, "differences": differences, "patch": "\n".join(change.get("diff", "") for change in differences),
                 "review_notes": _header_review_notes(differences),
                 "snapshot_hash": workspace.get("snapshot_hash"), "candidate_hash": _tree_hash(root),
@@ -171,14 +170,25 @@ class WorkspaceManager:
             db.execute("UPDATE workspaces SET status='destroyed' WHERE id=?", (workspace_id,))
             self.intelligence._audit(db, workspace["project_id"], None, "workspace.destroy", "workspace", workspace_id, {})
 
-    def _docker_run(self, workspace: dict[str, Any], command: list[str], image: str, timeout: int, writable: bool,
+    def _docker_run(self, workspace, command, image, timeout, writable, investigation_id, python_trace,
+                    native_trace_symbols=None, runtime_trace=None, report_format=None,
+                    allow_build_changes=False, build_changes_rationale="", private_suite=None):
+        docker = self._execution_engine()
+        reap_expired(docker, self.storage_root, self.intelligence.database)
+        run_id = _id("RUN")
+        deadline = int(time.time() + timeout + 10)
+        with execution_guard(docker, self.storage_root, self.intelligence.database, run_id, deadline):
+            return self._execute_container(workspace, command, image, timeout, writable, investigation_id, python_trace,
+                       native_trace_symbols, runtime_trace, report_format, allow_build_changes, build_changes_rationale,
+                       private_suite, run_id, deadline, docker)
+
+    def _execute_container(self, workspace: dict[str, Any], command: list[str], image: str, timeout: int, writable: bool,
                     investigation_id: str | None, python_trace: bool,
                     native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
                     report_format: str | None = None, allow_build_changes: bool = False, build_changes_rationale: str = "",
-                    private_suite: Path | None = None) -> dict[str, Any]:
+                    private_suite: Path | None = None, run_id=None, deadline=None, docker=None) -> dict[str, Any]:
         traced_command, runner = self._execution_options(command, image, timeout, python_trace,
                                                           native_trace_symbols, runtime_trace, report_format)
-        docker = self._execution_engine()
         container_user = self._container_user()
         baseline = Path(workspace["baseline_path"])
         if _tree_hash(baseline) != workspace["snapshot_hash"]:
@@ -196,7 +206,7 @@ class WorkspaceManager:
         image_id = self._image_identity(docker, image)
         args = self._container_arguments(docker, workspace, cid_name, mount_mode, container_user,
                                          writable, baseline, test_mounts)
-        args += _private_mount(private_suite)
+        args += _private_mount(private_suite) + lifecycle_arguments(self.storage_root, run_id, deadline)
         buffers = {"stdout": bytearray(), "stderr": bytearray()}
         truncated = {"stdout": False, "stderr": False}
         max_output = 1_000_000
@@ -204,9 +214,9 @@ class WorkspaceManager:
         timed_out = False
         cleanup_warning = None
         before_hash = _tree_hash(Path(workspace["path"]))
-        run_id = _id("RUN")
         started = time.monotonic()
         self._begin_run(workspace, investigation_id, run_id, _recorded_command(command, private_suite), image, image_id, before_hash)
+        register_deadline(self.intelligence.database, run_id, self.storage_root, deadline)
         trace_result = None
         trace_file = None
         report_file, report, report_error = None, None, None
@@ -218,7 +228,7 @@ class WorkspaceManager:
             if traced_command:
                 trace_fd, trace_file = tempfile.mkstemp(prefix=".octane-trace-", dir=self.storage_root)
                 os.close(trace_fd)
-                args += ["--ulimit", "fsize=524288:524288", "-v", f"{trace_file}:/octane-trace-output:rw"]
+                args += ["-v", f"{trace_file}:/octane-trace-output:rw"]
                 if runner:
                     trace_runner = Path(__file__).with_name(runner[0]).resolve()
                     args += ["-v", f"{trace_runner}:{runner[1]}:ro"]
@@ -250,6 +260,7 @@ class WorkspaceManager:
         finally:
             if process and process.poll() is None:
                 process.kill()
+                _stop_container(docker, cid_name)
                 process.wait()
             if process:
                 process.stdout.close()
@@ -391,7 +402,7 @@ class WorkspaceManager:
 
     def _container_arguments(self, docker, workspace, cid_name, mount_mode, container_user, writable, baseline, test_mounts):
         args = [docker, "run", "--rm", "--cidfile", cid_name, "--stop-timeout=1", "--network=none", "--memory=512m",
-                "--memory-swap=512m", "--cpus=1", "--pids-limit=128", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+                "--memory-swap=512m", "--ulimit", "fsize=67108864:67108864", "--cpus=1", "--pids-limit=128", "--cap-drop=ALL", "--security-opt=no-new-privileges",
                 "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "-v", f"{workspace['path']}:/workspace:{mount_mode}",
                 "-w", "/workspace", "-e", "HOME=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1"]
         if self.container_engine == "podman":
@@ -636,7 +647,11 @@ def _recorded_command(command, private_suite):
 
 
 def _private_mount(suite):
-    return ["--mount", f"type=bind,source={suite},target=/octane-holdout,readonly"] if suite is not None else []
+    if suite is None:
+        return []
+    mount = io.StringIO()
+    csv.writer(mount, lineterminator="").writerow(["type=bind", "source=" + str(suite), "target=/octane-holdout", "readonly"])
+    return ["--mount", mount.getvalue()]
 
 
 def _withhold_private_output(output, enabled=True):
@@ -647,3 +662,29 @@ def _withhold_private_output(output, enabled=True):
     command_hash = hashlib.sha256(json.dumps(output.get("command", [])).encode()).hexdigest()
     output.update(stdout="", stderr="", command=["<operator-withheld>"], private_command_sha256=command_hash,
                   private_validation=True, output_sha256=digest)
+
+
+def _file_change(relative, left, right, a=None, b=None):
+    exists_left, exists_right = left.is_file(), right.is_file()
+    a = left.read_bytes() if a is None and exists_left else (a or b'')
+    b = right.read_bytes() if b is None and exists_right else (b or b'')
+    kind = 'modified' if exists_left and exists_right else ('added' if exists_right else 'removed')
+    try:
+        if b'\0' in a or b'\0' in b or any(char in relative for char in '\n\r\t'):
+            raise ValueError('path or contents cannot be safely represented in a text patch')
+        before = 'a/' + relative if exists_left else '/dev/null'
+        after = 'b/' + relative if exists_right else '/dev/null'
+        lines = difflib.unified_diff(a.decode('utf-8').splitlines(True), b.decode('utf-8').splitlines(True),
+                                     fromfile=before, tofile=after)
+        diff = ''.join(line if line.endswith('\n') else line + '\n\\ No newline at end of file\n' for line in lines)
+        if kind != 'modified':
+            mode = (left if exists_left else right).stat().st_mode
+            mode_text = '100755' if mode & 0o111 else '100644'
+            header = 'deleted file mode ' if exists_left else 'new file mode '
+            diff = 'diff --git ' + json.dumps('a/' + relative, ensure_ascii=False) + ' ' + json.dumps('b/' + relative, ensure_ascii=False) + '\n' + header + mode_text + '\n' + diff
+        binary = False
+    except ValueError:
+        diff, binary = '', True
+    return {'path': relative, 'kind': kind, 'binary': binary, 'diff': diff,
+            'original_sha256': hashlib.sha256(a).hexdigest() if exists_left else None,
+            'workspace_sha256': hashlib.sha256(b).hexdigest() if exists_right else None}

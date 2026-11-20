@@ -60,7 +60,7 @@ Saved investigations carry evidence references, revision information, and explor
 
 ## Function graphs and runtime traces
 
-- Optional operator-configured Pyright and TypeScript language servers provide semantic call hierarchy with labeled static fallback. Python analysis also uses its built-in AST and lexical scopes. The optional Tree-sitter extra adds syntax-level call candidates across languages including C, C++, C#, Go, Java, JavaScript, PHP, Ruby, Rust, and TypeScript.
+- Optional operator-configured host Pyright and TypeScript language servers, explicitly enabled with `trustedProject: true` for trusted checkouts, provide semantic call hierarchy with labeled static fallback. Python analysis also uses its built-in AST and lexical scopes. The optional Tree-sitter extra adds syntax-level call candidates across languages including C, C++, C#, Go, Java, JavaScript, PHP, Ruby, Rust, and TypeScript.
 - Runtime probes support Python calls and exception locations, Node.js sampling, Ruby method calls, GDB traces for debug binaries, and compatible Speedscope profiles.
 - File and import graphs cover additional language families. Configure custom suffixes and import forms with a data-only `.octane/languages.json`.
 
@@ -149,3 +149,5 @@ npm test
 ```
 
 [CI](.github/workflows/tests.yml) exercises the local CLI on Python 3.9, the full suite on Python 3.11, 3.12, and 3.14, optional parsing, Node bridge and packaging, Docker repair/mutation/bisect/report/property checks, live language servers, offline signature tests, curated lint, and coverage gates. See the [architecture](docs/architecture.md), [workflow](docs/openclaw.md), and [implementation limits](docs/implementation-and-limitations.md).
+
+The [November 20 audit closure](docs/audit-hardening.md) covers output scrubbing, container crash deadlines/recovery, parser failures, UTF-8 XML, host-server trust and the remaining deployment limits.

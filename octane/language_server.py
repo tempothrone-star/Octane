@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 from pathlib import Path
 import queue
 import subprocess
 import threading
 import time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from .host_environment import language_server_environment
+from .process import stop_process_group
 from .db_support import _scrub_sensitive_text
 
 
@@ -25,6 +26,7 @@ class LanguageServer:
                                         stderr=subprocess.PIPE, env=language_server_environment(environment_keys),
                                         start_new_session=os.name == "posix")
         self.messages = queue.Queue(maxsize=256)
+        self.reader_error = None
         self.identifier = 0
         self.writer = None
         self.stderr_tail = bytearray()
@@ -67,6 +69,7 @@ class LanguageServer:
                     raise ValueError("language server response is incomplete")
                 self.messages.put(json.loads(raw), timeout=1)
         except (OSError, ValueError, KeyError, queue.Full) as exc:
+            self.reader_error = exc
             try:
                 self.messages.put(exc, timeout=1)
             except queue.Full:
@@ -104,13 +107,17 @@ class LanguageServer:
         identifier = self.identifier
         self.send(method, params, identifier)
         while True:
+            if self.reader_error is not None and isinstance(self.reader_error, queue.Full):
+                raise RuntimeError("language server message queue overflow")
             remaining = self.deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError("language server exceeded its analysis budget")
             try:
-                value = self.messages.get(timeout=remaining)
-            except queue.Empty as exc:
-                raise TimeoutError("language server exceeded its analysis budget") from exc
+                value = self.messages.get(timeout=min(remaining, 0.1))
+            except queue.Empty:
+                if self.reader_error is not None:
+                    raise self.reader_error from None
+                continue
             if isinstance(value, Exception):
                 raise value
             if "method" in value:
@@ -131,13 +138,7 @@ class LanguageServer:
             return value.get("result")
 
     def close(self):
-        if os.name == "posix":
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        elif self.process.poll() is None:
-            self.process.kill()
+        stop_process_group(self.process)
         self.process.wait(timeout=3)
         if self.writer is not None:
             self.writer.join(timeout=2)
@@ -165,9 +166,10 @@ def _definitions(items):
 
 def _node(item, language, root, revision, known):
     parsed = urlsplit(item["uri"])
-    if parsed.scheme != "file":
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
         return None
-    path = Path(unquote(parsed.path)).resolve()
+    root = root.resolve()
+    path = Path(url2pathname(parsed.path)).resolve()
     try:
         relative = path.relative_to(root).as_posix()
     except ValueError:
@@ -185,7 +187,14 @@ def _node(item, language, root, revision, known):
                                                 "provider": language}}
 
 
+def _trusted_server(definition):
+    if not isinstance(definition, dict) or definition.get('trustedProject') is not True:
+        raise ValueError('host language servers require explicit trustedProject=true; static fallback retained')
+    return definition
+
+
 def semantic_calls(root, files, contents, revision, known, servers, limit=50):
+    root = root.resolve()
     nodes, edges, coverage = {}, {}, {}
     for language, definition in (servers or {}).items():
         if language not in {"python", "typescript"}:
@@ -199,6 +208,7 @@ def semantic_calls(root, files, contents, revision, known, servers, limit=50):
         coverage[language] = status
         server = None
         try:
+            definition = _trusted_server(definition)
             command = definition.get("command") if isinstance(definition, dict) else definition
             options = {"disableAutomaticTypingAcquisition": True}
             if isinstance(definition, dict):
@@ -254,6 +264,7 @@ def semantic_calls(root, files, contents, revision, known, servers, limit=50):
                           truncated=status["truncated"] or len(selected) > 64)
         except (OSError, ValueError, RuntimeError, TimeoutError, TypeError, KeyError) as exc:
             status["fallback"] = type(exc).__name__
+            status["reason"] = _scrub_sensitive_text(str(exc))[:300]
             status["basis"] = "Static analyzer fallback retained"
         finally:
             if server is not None:

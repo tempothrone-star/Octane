@@ -12,7 +12,7 @@ import { tools } from "../openclaw/tools.js";
 import { callBridge } from "../openclaw/bridge.js";
 
 export function clientIdentity(info, suffix = "") {
-  if (!info || typeof info.name !== "string" || !info.name.trim()) return "mcp-stdio";
+  if (!info || typeof info.name !== "string" || !info.name.trim()) return "mcp-stdio" + (suffix ? ":" + suffix : "");
   const name = info.name.slice(0, 1024);
   const version = typeof info.version === "string" ? info.version.slice(0, 128) : "";
   const slug = name.normalize("NFKC").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "client";
@@ -24,7 +24,7 @@ export function createServer(config) {
   if (!Array.isArray(config.allowedProjectRoots) || config.allowedProjectRoots.length === 0) {
     throw new Error("Configure allowedProjectRoots before starting Octane MCP.");
   }
-  const setting = config.mcpSessionSuffix ?? false;
+  const setting = config.mcpSessionSuffix ?? true;
   if (typeof setting !== "boolean" && (typeof setting !== "string" || !/^[A-Za-z0-9._-]{1,64}$/.test(setting))) {
     throw new Error("mcpSessionSuffix must be a boolean or a short safe suffix.");
   }

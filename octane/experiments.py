@@ -79,8 +79,8 @@ def _candidate_comparison(manager, project_id, workspace_id, allow_test_changes,
         raise ValueError("testChangesRationale is required when test files change")
     if comparison["original_changed"]:
         raise ValueError("original project changed since snapshot; create a fresh experiment")
-    if not comparison["patch"] or any(change.get("binary") or change["kind"] != "modified" for change in comparison["differences"]):
-        raise ValueError("proposals currently require a non-empty text-only patch to existing files")
+    if not comparison["patch"] or any(change.get("binary") or change["kind"] not in {"modified", "added", "removed"} for change in comparison["differences"]):
+        raise ValueError("proposals require a non-empty text-only patch with regular files")
     if len(comparison["patch"].encode()) > 1_000_000:
         raise ValueError("patch exceeds the 1 MB proposal limit")
     if _scrub_sensitive_text(comparison["patch"]) != comparison["patch"]:

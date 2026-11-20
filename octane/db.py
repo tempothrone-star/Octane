@@ -78,6 +78,13 @@ class ProjectIntelligence(GraphStore, EvidenceStore, InvestigationStore):
 
     def _initialize_database(self) -> None:
         with self._session() as connection:
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if 'schema_migrations' in tables:
+                current = connection.execute('SELECT MAX(version) FROM schema_migrations').fetchone()[0]
+                if current is not None and current > 6:
+                    raise RuntimeError(f"database schema version {current} is newer than this Octane supports")
+                if current == 6:
+                    return
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(_SCHEMA)
             connection.execute("INSERT OR IGNORE INTO schema_migrations VALUES(1,?)", (_now(),))

@@ -103,7 +103,7 @@ test("MCP handshake clients have distinct ledger actors without privilege from t
   const root = join(base, "project"); mkdirSync(root);
   const config = join(base, "config.json");
   writeFileSync(config, JSON.stringify({allowedProjectRoots: [root], databasePath: join(base,"pil.sqlite3"),
-    workspaceRoot: join(base,"workspaces"), mcpSessionSuffix: "integration"}));
+    workspaceRoot: join(base,"workspaces")}));
   const connect = async (name) => {
     const client = new Client({name, version: "1.0"});
     t.after(() => client.close());
@@ -111,7 +111,7 @@ test("MCP handshake clients have distinct ledger actors without privilege from t
       args: [fileURLToPath(new URL("../mcp/server.js",import.meta.url)), "--config",config], stderr: "pipe"}));
     return client;
   };
-  const first = await connect("client-one"), second = await connect("client-two");
+  const first = await connect("client-one"), second = await connect("client-one");
   const created = await first.callTool({name:"octane_project",arguments:{action:"create",root,name:"identity"}});
   const projectId = created.structuredContent.result.id;
   const add = async (client) => client.callTool({name:"octane_evidence",arguments:{action:"add",projectId,
@@ -121,6 +121,7 @@ test("MCP handshake clients have distinct ledger actors without privilege from t
   const [ea,eb] = await Promise.all([get(a.structuredContent.result.id),get(b.structuredContent.result.id)]);
   assert.notEqual(ea.agent_id,eb.agent_id);
   assert.equal(clientIdentity(undefined),"mcp-stdio");
+  assert.equal(clientIdentity(undefined,"fresh"),"mcp-stdio:fresh");
   assert.notEqual(clientIdentity({name:"a/b",version:"1"}),clientIdentity({name:"a-b",version:"1"}));
   assert.match(clientIdentity({name:"client-one",version:"1"},"session"),/^mcp:client-one:[a-f0-9]+:session$/);
 });

@@ -22,6 +22,8 @@ class PatchGateTests(unittest.TestCase):
         self.root = base / "project"
         self.root.mkdir()
         (self.root / "source.py").write_text("VALUE = 1\n")
+        for name, content in getattr(self, "fixture_sources", {}).items():
+            (self.root / name).write_text(content)
         (self.root / "tests").mkdir()
         (self.root / "tests/test_source.py").write_text("assert VALUE == 2\n")
         self.bridge = OctaneBridge(str(base / "pil.sqlite3"), [str(self.root)], str(base / "workspaces"))
@@ -261,6 +263,46 @@ class PatchGateTests(unittest.TestCase):
         payload["mutants"] = [{"run_id": self.fixed, "operator": "original-source", "status": "survived"}]
         evidence = submit(payload)
         self.reject("detect the tested original-source", supporting_evidence_ids=[self.intent, evidence])
+
+    def test_unavailable_mutation_claim_cannot_hide_supported_source(self):
+        comparison = self.manager.compare_workspace(self.candidate["id"])
+        tests, _ = baseline_tests(Path(self.manager._get(self.candidate["id"])["baseline_path"]))
+        payload = {"candidate_hash": comparison["candidate_hash"], "image_id": "sha256:" + "a" * 64,
+                   "test_integrity": tests, "status": "unavailable", "candidate_run_id": self.fixed}
+        evidence = self.call("evidence_add", projectId=self.project, evidenceType="mutation_result",
+                             description="Unsupported claim fixture", payload=payload)["id"]
+        self.reject("unavailable mutation evidence", supporting_evidence_ids=[self.intent, evidence])
+
+    def test_build_override_is_required_and_binds_current_key_diff_to_runs(self):
+        from octane.build_config import build_change_review
+        self.fixture_sources = {"package.json": '{"dependencies":{"example":"1"}}'}
+        self.setUp()
+        self.manager.apply_candidate_patch(self.candidate["id"], "package.json", '{"dependencies":{"example":"2"}}')
+        self.fixed = self.record(self.candidate, self.focus, "passed")
+        self.regression = self.record(self.candidate, self.preserve, "passed")
+        self.reject("allowBuildChanges")
+        options = {"allow_build_changes": True, "build_changes_rationale": "Fix a dependency regression"}
+        self.reject("explicit build override", **options)
+        stored = self.manager._get(self.candidate["id"])
+        review = build_change_review(Path(stored["baseline_path"]), Path(stored["path"]), ["package.json"],
+                                    allowed=True, rationale=options["build_changes_rationale"])
+        for run in (self.fixed, self.regression):
+            self.result(run, build_changes=review)
+        proposal = self.propose(**options)
+        self.assertTrue(proposal["build_changes"]["allowed"])
+        self.assertEqual(proposal["build_changes"]["files"][0]["key_diff"][0]["key"], "/dependencies/example")
+
+    def test_go_only_proposal_explicitly_reports_mutation_unavailable(self):
+        self.fixture_sources = {"app.go": 'package main\nfunc value() int { return 1 }\n'}
+        self.setUp()
+        self.manager.apply_candidate_patch(self.candidate["id"], "source.py", "VALUE = 1\n")
+        self.manager.apply_candidate_patch(self.candidate["id"], "app.go", 'package main\nfunc value() int { return 2 }\n')
+        self.fixed = self.record(self.candidate, self.focus, "passed")
+        self.regression = self.record(self.candidate, self.preserve, "passed")
+        proposal = self.propose()
+        self.assertEqual(proposal["mutation_support"]["status"], "unavailable")
+        self.assertFalse(proposal["mutation_support"]["paths"][0]["available"])
+        self.assertEqual(proposal["mutation_results"], [])
 
     def test_trace_modes_and_scope_include_runtime_and_native_paths(self):
         from octane.experiments import _proposal_scope, _trace_settings

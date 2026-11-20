@@ -12,7 +12,7 @@ const configSchema = Type.Object({
   containerRuntime: Type.Optional(Type.Literal("runsc")),
   languageServers: Type.Optional(Type.Record(Type.String(), Type.Union([
     Type.Array(Type.String()),
-    Type.Object({ command: Type.Array(Type.String()), initializationOptions: Type.Optional(Type.Record(Type.String(), Type.Any())) }),
+    Type.Object({ command: Type.Array(Type.String()), initializationOptions: Type.Optional(Type.Record(Type.String(), Type.Any())), environmentAllowlist: Type.Optional(Type.Array(Type.String())) }),
   ]))),
   databasePath: Type.Optional(Type.String({ minLength: 1 })),
   workspaceRoot: Type.Optional(Type.String({ minLength: 1 })),

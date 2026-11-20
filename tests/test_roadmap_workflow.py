@@ -177,3 +177,48 @@ class RoadmapWorkflowTests(unittest.TestCase):
                   content=source.replace('value || -1', 'value'))
         passed = self.call('workspace_property', **params)
         self.assertEqual(passed['returncode'], 0, passed['stderr'])
+
+    @unittest.skipUnless(os.environ.get('OCTANE_TEST_NODE_PROPERTY_IMAGE'), 'set a reviewed Node image')
+    def test_real_javascript_and_typescript_mutations(self):
+        from octane.ledger.ast_backend import supported
+        image = os.environ['OCTANE_TEST_NODE_PROPERTY_IMAGE']
+        for name, language, annotation in (('app.js','javascript',''),('app.ts','typescript',': number')):
+            if not supported(language,name):
+                self.skipTest('install ast extra for JS/TS mutation operators')
+            with self.subTest(language=language):
+                source = f'exports.value = function(value{annotation}) {{ return value + 2; }};\n'
+                (self.root/name).write_text(source)
+                self.call('scan',projectId=self.project)
+                investigation = self.call('investigation_create',projectId=self.project,objective='Preserve numeric multiplication')['id']
+                workspace = self.workspace()
+                command = ['node','--experimental-strip-types','-e',
+                           f'const {{value}}=require("./{name}"); if(value(0)!==0||value(3)!==6) process.exit(1);']
+                args = dict(workspaceId=workspace['id'],command=command,image=image,
+                            investigationId=investigation,mode='experimentation')
+                self.assertEqual(self.call('workspace_run',**args)['returncode'],1)
+                self.call('workspace_patch',workspaceId=workspace['id'],relativePath=name,content=source.replace('value + 2','value * 2'))
+                candidate=self.call('workspace_run',**args)
+                self.assertEqual(candidate['returncode'],0,candidate['stderr'])
+                result=self.call('workspace_mutate',workspaceId=workspace['id'],candidateRunId=candidate['run_id'],mutationLimit=5)
+                self.assertEqual(result['status'],'completed')
+                self.assertTrue(result['original_bug_detected'])
+                self.assertTrue(any(item['operator'].startswith(language+':') for item in result['mutants']))
+
+    @unittest.skipUnless(os.environ.get('OCTANE_TEST_DOCKER_IMAGE'), 'set an approved image')
+    def test_real_build_override_runs_changed_dependency_config_and_original_tests(self):
+        (self.root/'package.json').write_text('{"dependencies":{"fixture":"1"},"scripts":{"test":"original"}}')
+        self.call('scan',projectId=self.project)
+        workspace=self.workspace()
+        self.call('workspace_patch',workspaceId=workspace['id'],relativePath='package.json',
+                  content='{"dependencies":{"fixture":"2"},"scripts":{"test":"original"}}')
+        command=['python','-B','-c','import json; assert json.load(open("package.json"))["dependencies"]["fixture"]=="2"']
+        args=dict(workspaceId=workspace['id'],command=command,image=self.image,mode='experimentation')
+        with self.assertRaisesRegex(ValueError,'allowBuildChanges'):
+            self.call('workspace_run',**args)
+        result=self.call('workspace_run',**args,allowBuildChanges=True,buildChangesRationale='Fix the dependency regression')
+        self.assertEqual(result['returncode'],0,result['stderr'])
+        self.assertEqual(result['build_changes']['files'][0]['key_diff'][0]['key'],'/dependencies/fixture')
+        self.call('workspace_patch',workspaceId=workspace['id'],relativePath='package.json',
+                  content='{"dependencies":{"fixture":"2"},"scripts":{"test":"true"}}')
+        with self.assertRaisesRegex(ValueError,'test settings'):
+            self.call('workspace_run',**args,allowBuildChanges=True,buildChangesRationale='Cannot weaken original check selection')

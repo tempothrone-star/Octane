@@ -163,11 +163,14 @@ def _mutation(data, format_name):
         items = data.get("mutants", [])
         items = items.values() if isinstance(items, dict) else items
         statuses = [(item.get("status", "") if isinstance(item, dict) else str(item)).lower() for item in items]
+    statuses = [status.replace("_", "").replace("-", "") for status in statuses]
     killed = sum(status in {"killed", "detected"} for status in statuses)
-    survived = sum(status in {"survived", "surviving"} for status in statuses)
+    survived = sum(status in {"survived", "surviving", "nocoverage", "uncovered", "notcovered"} for status in statuses)
+    inconclusive = len(statuses) - killed - survived
     tested = killed + survived
-    return {"mutation": {"killed": killed, "survived": survived, "total": len(statuses),
-                         "score": killed / tested if tested else None,
+    return {"mutation": {"killed": killed, "survived": survived, "inconclusive": inconclusive, "total": len(statuses),
+                         "status": "inconclusive" if inconclusive else ("completed" if tested else "unavailable"),
+                         "score": killed / tested if tested and not inconclusive else None,
                          "basis": "Imported mutation report; execution provenance must be linked separately"}}
 
 

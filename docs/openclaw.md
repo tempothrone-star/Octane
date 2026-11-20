@@ -74,3 +74,7 @@ The packaged plugin registered twelve optional tools under the [OpenClaw tool pl
 All twelve tool names remain shared between OpenClaw and MCP. Workspace actions now include `mutate`, `property`, `bisect`, and `evaluate`; evidence actions include report `import` and unsigned provenance `attest`. See the [integration guide](integrations.md) for schemas, examples, dependencies, and limits. Candidate executions overlay the original tests, and proposals touching tests require an explicit flag and recorded rationale. Runtime reports must be available when requested; matching failed test IDs must pass in the candidate.
 
 Database helpers/schema/graph queries live in `db_support.py`, `db_schema.py`, and `db_graph.py`; workspace tool handlers live in `bridge_workspace.py`. They share the existing transaction and allowlist boundaries.
+
+## Follow-up release
+
+The [0.2.0 review](follow-up-review.md) documents separate build overrides, explicit mutation capabilities including JS/TS, scrubbed provider environments, per-client MCP attribution, rebuilt provenance, and SARIF output. All existing twelve tool names remain unchanged. Updated build overrides are required on execution calls as well as the proposal; refresh the linked plugin's tool schemas after upgrading.

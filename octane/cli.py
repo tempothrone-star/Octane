@@ -9,6 +9,8 @@ from .db import ProjectIntelligence
 from .exploration import ExplorationProfile, PythonAdapter, Tentacle
 from .scanner import ProjectScanner
 from .reports import FORMATS, import_report
+from .sarif import export_sarif
+from .sigstore import verify_sigstore
 from .github import GitHubIntegration
 from .provenance import sign_statement, statement, verify_envelope
 from .bisect import bisect_project
@@ -30,6 +32,12 @@ def main() -> None:
     report.add_argument("path")
     report.add_argument("--format", choices=sorted(FORMATS), required=True)
     report.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
+    sarif = commands.add_parser("export-sarif", help="export recorded findings as attributed SARIF 2.1.0")
+    sarif.add_argument("project_id")
+    sarif.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
+    sarif.add_argument("--evidence", help="comma-separated evidence IDs; defaults to recorded structured reports")
+    sarif.add_argument("--limit", type=int, default=1000)
+    sarif.add_argument("--output", type=Path, required=True)
     github = commands.add_parser("github", help="import GitHub issues or CI evidence and explicitly publish summaries")
     github.add_argument("project_id")
     github.add_argument("repository")
@@ -45,12 +53,21 @@ def main() -> None:
     provenance.add_argument("project_id")
     provenance.add_argument("evidence_id")
     provenance.add_argument("--key", type=Path)
+    password = provenance.add_mutually_exclusive_group()
+    password.add_argument("--key-password-env", help="name of the environment variable holding an encrypted PEM password")
+    password.add_argument("--key-password-prompt", action="store_true", help="prompt for an encrypted PEM password")
     provenance.add_argument("--output", type=Path, required=True)
     provenance.add_argument("--database", type=Path, default=Path(".octane/pil.sqlite3"))
     verify = commands.add_parser("verify-provenance", help="verify a DSSE envelope against a selected trusted public key")
     verify.add_argument("envelope", type=Path)
-    verify.add_argument("--public-key", type=Path, required=True)
+    verification_backend = verify.add_mutually_exclusive_group(required=True)
+    verification_backend.add_argument("--public-key", type=Path)
+    verification_backend.add_argument("--sigstore-bundle", type=Path)
+    verify.add_argument("--certificate-identity")
+    verify.add_argument("--certificate-oidc-issuer")
     verify.add_argument("--patch-sha256")
+    verify.add_argument("--rebuild", action="store_true", help="re-derive and compare the signed statement from the ledger")
+    verify.add_argument("--database", type=Path)
     bisect = commands.add_parser("bisect", help="bisect a local Git history using isolated container checks")
     bisect.add_argument("project_id")
     bisect.add_argument("good")
@@ -71,7 +88,19 @@ def main() -> None:
     demo.add_argument("--database", type=Path, help="retain demo database at this path")
     args = parser.parse_args()
     if args.command == "verify-provenance":
-        print(json.dumps(verify_envelope(json.loads(args.envelope.read_text()), args.public_key, args.patch_sha256), indent=2))
+        if args.rebuild and (args.database is None or not args.database.is_file()):
+            parser.error("--rebuild requires an existing --database file")
+        ledger = ProjectIntelligence(args.database) if args.rebuild else None
+        if args.sigstore_bundle is not None:
+            result = verify_sigstore(args.envelope, args.sigstore_bundle, args.certificate_identity,
+                                     args.certificate_oidc_issuer, intelligence=ledger, rebuild=args.rebuild)
+            if args.patch_sha256 and not any(subject.get("digest",{}).get("sha256")==args.patch_sha256
+                                            for subject in result["statement"].get("subject",[])):
+                parser.error("signed statement does not identify the expected patch")
+        else:
+            result = verify_envelope(json.loads(args.envelope.read_text()), args.public_key, args.patch_sha256,
+                                     intelligence=ledger, rebuild=args.rebuild)
+        print(json.dumps(result, indent=2))
         return
     if args.command == "demo" and args.database is None:
         import tempfile
@@ -92,6 +121,11 @@ def main() -> None:
     elif args.command == "import-report":
         actor = intelligence.get_or_register_agent(args.project_id, "report-importer", "report observer", [], ["write_evidence"])
         print(json.dumps(import_report(intelligence, args.project_id, actor["id"], args.path, args.format), indent=2))
+    elif args.command == "export-sarif":
+        from .ledger.core import _atomic_json
+        value = export_sarif(intelligence, args.project_id, args.evidence.split(",") if args.evidence else None, args.limit)
+        _atomic_json(args.output, value)
+        print(json.dumps({"path":str(args.output), "results":len(value["runs"][0]["results"])}))
     elif args.command == "github":
         actor = intelligence.get_or_register_agent(args.project_id, "github-integration", "remote observer", [], ["write_evidence"])
         integration = GitHubIntegration(intelligence, args.project_id, actor["id"])
@@ -104,9 +138,20 @@ def main() -> None:
                                          pull_request=args.pull_request, head_sha=args.check_commit, approved=args.publish)
         print(json.dumps(result, indent=2))
     elif args.command == "provenance":
+        if args.key is None and (args.key_password_env or args.key_password_prompt):
+            parser.error("key-password options require --key")
         value = statement(intelligence, args.project_id, args.evidence_id)
         if args.key is not None:
-            value = sign_statement(value, args.key)
+            secret = None
+            if args.key_password_env:
+                import os
+                if args.key_password_env not in os.environ:
+                    parser.error("selected key-password environment variable is not set")
+                secret = os.environ[args.key_password_env].encode()
+            elif args.key_password_prompt:
+                import getpass
+                secret = getpass.getpass("Signing key password: ").encode()
+            value = sign_statement(value, args.key, password=secret)
         from .ledger.core import _atomic_json
 
         _atomic_json(args.output, value)

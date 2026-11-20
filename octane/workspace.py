@@ -24,7 +24,8 @@ from .call_plot import call_plot
 from .native_trace import load_native_trace, native_trace_command
 from .runtime_profiles import load_profile_trace, profile_command
 from .storage import private_directory
-from .test_protection import baseline_tests
+from .test_protection import baseline_tests, is_test_path
+from .build_config import build_change_review, is_build_path
 from .reports import FORMATS, MAX_REPORT_BYTES, parse_report
 
 
@@ -95,25 +96,27 @@ class WorkspaceManager:
     def run_observation(self, workspace_id: str, command: list[str], image: str, timeout_seconds: int = 30,
                         *, investigation_id: str | None = None, python_trace: bool = False,
                         native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
-                        report_format: str | None = None) -> dict[str, Any]:
+                        report_format: str | None = None, allow_build_changes: bool = False, build_changes_rationale: str = "") -> dict[str, Any]:
         """Run an explicit command in Docker, never as a host subprocess."""
         workspace = self._get(workspace_id)
         if workspace["mode"] != "observation":
             raise PermissionError("observation execution requires observation mode")
         return self._docker_run(workspace, command, image, timeout_seconds, writable=False,
                                 investigation_id=investigation_id, python_trace=python_trace,
-                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace, report_format=report_format)
+                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace, report_format=report_format,
+                                allow_build_changes=allow_build_changes, build_changes_rationale=build_changes_rationale)
 
     def run_experiment(self, workspace_id: str, command: list[str], image: str, timeout_seconds: int = 30,
                        *, investigation_id: str | None = None, python_trace: bool = False,
                        native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
-                       report_format: str | None = None) -> dict[str, Any]:
+                       report_format: str | None = None, allow_build_changes: bool = False, build_changes_rationale: str = "") -> dict[str, Any]:
         workspace = self._get(workspace_id)
         if workspace["mode"] != "experimentation":
             raise PermissionError("experiments require experimentation mode")
         return self._docker_run(workspace, command, image, timeout_seconds, writable=True,
                                 investigation_id=investigation_id, python_trace=python_trace,
-                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace, report_format=report_format)
+                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace, report_format=report_format,
+                                allow_build_changes=allow_build_changes, build_changes_rationale=build_changes_rationale)
 
     def compare_workspace(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._get(workspace_id)
@@ -171,7 +174,7 @@ class WorkspaceManager:
     def _docker_run(self, workspace: dict[str, Any], command: list[str], image: str, timeout: int, writable: bool,
                     investigation_id: str | None, python_trace: bool,
                     native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
-                    report_format: str | None = None) -> dict[str, Any]:
+                    report_format: str | None = None, allow_build_changes: bool = False, build_changes_rationale: str = "") -> dict[str, Any]:
         traced_command, runner = self._execution_options(command, image, timeout, python_trace,
                                                           native_trace_symbols, runtime_trace, report_format)
         docker = self._execution_engine()
@@ -179,18 +182,17 @@ class WorkspaceManager:
         baseline = Path(workspace["baseline_path"])
         if _tree_hash(baseline) != workspace["snapshot_hash"]:
             raise RuntimeError("workspace baseline contents changed")
+        comparison = self.compare_workspace(workspace["id"])
+        changed_builds = [change["path"] for change in comparison["differences"]
+                          if is_build_path(change["path"]) and not is_test_path(change["path"])]
+        build_review = build_change_review(baseline, Path(workspace["path"]), changed_builds,
+                                          allowed=allow_build_changes, rationale=build_changes_rationale)
         test_integrity, test_mounts = baseline_tests(baseline)
         mount_mode = "rw" if writable else "ro"
         cid_fd, cid_name = tempfile.mkstemp(prefix=".octane-cid-", dir=self.storage_root)
         os.close(cid_fd)
         os.unlink(cid_name)
-        try:
-            image_id = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", image],
-                                      capture_output=True, text=True, timeout=10, check=True).stdout.strip()
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError("Container engine could not inspect the selected image; pull the approved image first") from exc
-        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
-            raise RuntimeError("Container engine did not return an immutable local image ID; pull the approved image first")
+        image_id = self._image_identity(docker, image)
         args = self._container_arguments(docker, workspace, cid_name, mount_mode, container_user,
                                          writable, baseline, test_mounts)
         buffers = {"stdout": bytearray(), "stderr": bytearray()}
@@ -202,16 +204,7 @@ class WorkspaceManager:
         before_hash = _tree_hash(Path(workspace["path"]))
         run_id = _id("RUN")
         started = time.monotonic()
-        with self.intelligence._transaction() as db:
-            if investigation_id is not None:
-                inv = db.execute("SELECT project_id,revision,status FROM investigations WHERE id=?", (investigation_id,)).fetchone()
-                revision = self.intelligence.get_project_revision(workspace["project_id"])
-                if (not inv or inv["project_id"] != workspace["project_id"] or inv["status"] in {"completed", "abandoned"}
-                        or inv["revision"] != revision or workspace["base_revision"] != revision):
-                    raise ValueError("execution needs a current investigation and workspace from the same project revision")
-            db.execute("INSERT INTO execution_runs(id,project_id,workspace_id,investigation_id,command_json,image,image_id,before_hash,snapshot_hash,status,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                       (run_id, workspace["project_id"], workspace["id"], investigation_id, json.dumps(command), image, image_id,
-                        before_hash, workspace.get("snapshot_hash") or before_hash, "running", "{}", _now()))
+        self._begin_run(workspace, investigation_id, run_id, command, image, image_id, before_hash)
         trace_result = None
         trace_file = None
         report_file, report, report_error = None, None, None
@@ -260,25 +253,8 @@ class WorkspaceManager:
                 process.stdout.close()
                 process.stderr.close()
             Path(cid_name).unlink(missing_ok=True)
-            if report_file is not None:
-                try:
-                    with Path(report_file).open("rb") as stream:
-                        report = parse_report(stream.read(MAX_REPORT_BYTES + 1), report_format, Path(workspace["path"]))
-                except (OSError, ValueError) as exc:
-                    report_error = str(exc)
-                finally:
-                    Path(report_file).unlink(missing_ok=True)
-            if trace_file:
-                try:
-                    if process and not timed_out:
-                        if python_trace:
-                            trace_result = _load_python_trace(Path(trace_file))
-                        elif native_trace_symbols is not None:
-                            trace_result = load_native_trace(Path(trace_file), native_trace_symbols)
-                        else:
-                            trace_result = load_profile_trace(Path(trace_file), Path(workspace["path"]), runtime_trace)
-                finally:
-                    Path(trace_file).unlink(missing_ok=True)
+            report, report_error, trace_result = self._execution_artifacts(workspace, process, timed_out,
+                report_file, report_format, trace_file, python_trace, native_trace_symbols, runtime_trace)
         output = {"run_id": run_id, "returncode": returncode, "stdout": buffers["stdout"].decode("utf-8", errors="replace"),
                   "stderr": buffers["stderr"].decode("utf-8", errors="replace"), "command": command, "image": image,
                   "network": "disabled", "workspace_mode": workspace["mode"], "timed_out": timed_out,
@@ -287,6 +263,7 @@ class WorkspaceManager:
                   "test_integrity": test_integrity, "container_user": container_user or "image-default",
                   "container_engine": self.container_engine, "container_runtime": self.container_runtime or "engine-default",
                   "allow_default_container_user": self.allow_default_container_user,
+                  "build_changes": build_review,
                   "source_revision": workspace.get("source_revision") or workspace["base_revision"],
                   "duration_seconds": round(time.monotonic() - started, 6)}
         if python_trace:
@@ -299,6 +276,20 @@ class WorkspaceManager:
                                                         "reason": "Runtime profile did not complete or could not be read"}
         if report_format is not None:
             output.update(report_format=report_format, report=report, report_error=report_error)
+        return self._record_execution(workspace, output, timed_out, returncode, run_id)
+
+    @staticmethod
+    def _image_identity(docker, image):
+        try:
+            image_id = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", image],
+                                      capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError("Container engine could not inspect the selected image; pull the approved image first") from exc
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            raise RuntimeError("Container engine did not return an immutable local image ID; pull the approved image first")
+        return image_id
+
+    def _record_execution(self, workspace, output, timed_out, returncode, run_id):
         runtime_agent = self.intelligence.get_or_register_agent(workspace["project_id"], "docker-runtime", "runtime observer",
                                                                 ["docker-isolated-execution"], ["write_evidence"])
         with self.intelligence._transaction() as db:
@@ -320,6 +311,42 @@ class WorkspaceManager:
             self.intelligence._audit(db, workspace["project_id"], runtime_agent["id"], "workspace.run", "execution", run_id,
                                      {"status": status, "evidence_id": evidence["id"]})
         return _scrub_sensitive_value(output)
+
+    @staticmethod
+    def _execution_artifacts(workspace, process, timed_out, report_file, report_format, trace_file, python_trace, native_trace_symbols, runtime_trace):
+        report, report_error, trace_result = None, None, None
+        if report_file is not None:
+            try:
+                with Path(report_file).open("rb") as stream:
+                    report = parse_report(stream.read(MAX_REPORT_BYTES + 1), report_format, Path(workspace["path"]))
+            except (OSError, ValueError) as exc:
+                report_error = str(exc)
+            finally:
+                Path(report_file).unlink(missing_ok=True)
+        if trace_file:
+            try:
+                if process and not timed_out:
+                    if python_trace:
+                        trace_result = _load_python_trace(Path(trace_file))
+                    elif native_trace_symbols is not None:
+                        trace_result = load_native_trace(Path(trace_file), native_trace_symbols)
+                    else:
+                        trace_result = load_profile_trace(Path(trace_file), Path(workspace["path"]), runtime_trace)
+            finally:
+                Path(trace_file).unlink(missing_ok=True)
+        return report, report_error, trace_result
+
+    def _begin_run(self, workspace, investigation_id, run_id, command, image, image_id, before_hash):
+        with self.intelligence._transaction() as db:
+            if investigation_id is not None:
+                inv = db.execute("SELECT project_id,revision,status FROM investigations WHERE id=?", (investigation_id,)).fetchone()
+                revision = self.intelligence.get_project_revision(workspace["project_id"])
+                if (not inv or inv["project_id"] != workspace["project_id"] or inv["status"] in {"completed", "abandoned"}
+                        or inv["revision"] != revision or workspace["base_revision"] != revision):
+                    raise ValueError("execution needs a current investigation and workspace from the same project revision")
+            db.execute("INSERT INTO execution_runs(id,project_id,workspace_id,investigation_id,command_json,image,image_id,before_hash,snapshot_hash,status,result_json,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                       (run_id, workspace["project_id"], workspace["id"], investigation_id, json.dumps(command), image, image_id,
+                        before_hash, workspace.get("snapshot_hash") or before_hash, "running", "{}", _now()))
 
     @staticmethod
     def _execution_options(command, image, timeout, python_trace, native_trace_symbols, runtime_trace, report_format):

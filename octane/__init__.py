@@ -2,6 +2,8 @@
 
 from importlib import import_module
 
+__version__ = "0.2.0"
+
 __all__ = ["ProjectIntelligence", "ProjectScanner", "InvestigationWorkflow", "PythonAdapter", "ExplorationProfile",
            "ExplorationScheduler", "Tentacle", "WorkspaceManager"]
 

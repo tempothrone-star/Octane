@@ -8,7 +8,8 @@ from pathlib import Path
 
 from .db import _id
 from .experiments import _changed_lines
-from .test_protection import baseline_tests, is_test_path
+from .test_protection import baseline_tests
+from .mutation_support import javascript_mutants, mutation_support
 from .workspace import WorkspaceManager
 
 
@@ -50,17 +51,20 @@ def mutation_candidates(manager, workspace_id, limit):
             raise ValueError("mutation testing supports text edits to existing files")
         relative = change["path"]
         patches[relative] = (candidates / relative).read_text()
+    support = mutation_support(comparison["differences"])
+    available = {item["path"] for item in support["paths"] if item["available"]}
     for change in comparison["differences"]:
         relative = change["path"]
-        if is_test_path(relative):
+        if relative not in available:
             continue
         mutants.append({"id": _id("MUT"), "path": relative, "operator": "original-source",
                         "content": (originals / relative).read_text()})
-        if relative.endswith(".py"):
-            for operator, content in _python_mutants(patches[relative], _changed_lines(change.get("diff", ""))):
-                mutants.append({"id": _id("MUT"), "path": relative, "operator": operator, "content": content})
-                if len(mutants) >= limit:
-                    break
+        local = (_python_mutants(patches[relative], _changed_lines(change.get("diff", ""))) if relative.casefold().endswith(".py")
+                 else javascript_mutants(patches[relative], relative, _changed_lines(change.get("diff", ""))))
+        for operator, content in local:
+            mutants.append({"id": _id("MUT"), "path": relative, "operator": operator, "content": content})
+            if len(mutants) >= limit:
+                break
         if len(mutants) >= limit:
             break
     return workspace, comparison, patches, mutants[:limit]
@@ -86,7 +90,9 @@ def run_mutations(manager: WorkspaceManager, workspace_id, candidate_run_id, age
     trace_options = {"python_trace": "python_trace" in result,
                      "native_trace_symbols": result.get("native_trace", {}).get("symbols"),
                      "runtime_trace": result.get("runtime_trace", {}).get("format"),
-                     "report_format": result.get("report_format")}
+                     "report_format": result.get("report_format"),
+                     "allow_build_changes": result.get("build_changes", {}).get("allowed", False),
+                     "build_changes_rationale": result.get("build_changes", {}).get("justification", "")}
     for mutant in mutants:
         snapshot = manager.create_workspace(workspace["project_id"], "experimentation")
         try:
@@ -106,9 +112,13 @@ def run_mutations(manager: WorkspaceManager, workspace_id, candidate_run_id, age
     survived = sum(item["status"] == "survived" for item in results)
     tested = killed + survived
     reversions = [item for item in results if item["operator"] == "original-source"]
-    payload = {"candidate_hash": comparison["candidate_hash"], "candidate_run_id": candidate_run_id,
+    support = mutation_support(comparison["differences"])
+    status = ('unavailable' if support['status'] == 'unavailable' else
+              ('inconclusive' if not tested or any(item['status'] == 'inconclusive' for item in results) else
+               ('partial' if support['status'] == 'partial' else 'completed')))
+    payload = {"status": status, "support": support, "reason": support['reason'], "candidate_hash": comparison["candidate_hash"], "candidate_run_id": candidate_run_id,
                "image_id": row["image_id"], "test_integrity": original_tests, "mutants": results,
-               "killed": killed, "survived": survived, "score": killed / tested if tested else None,
+               "killed": killed, "survived": survived, "score": killed / tested if tested and status not in {"unavailable", "inconclusive"} else None,
                "original_bug_detected": bool(reversions) and all(item["status"] == "killed" for item in reversions),
                "basis": "Bounded original-source reversions and local mutation operators"}
     evidence = intelligence.submit_evidence(workspace["project_id"], "mutation_result", payload,

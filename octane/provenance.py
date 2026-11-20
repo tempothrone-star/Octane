@@ -18,7 +18,9 @@ def _pae(payload):
     return b"DSSEv1 " + str(len(kind)).encode() + b" " + kind + b" " + str(len(payload)).encode() + b" " + payload
 
 
-def statement(intelligence, project_id, proposal_evidence_id):
+def statement(intelligence, project_id, proposal_evidence_id, *, format_version=2):
+    if format_version not in {1, 2}:
+        raise ValueError("unsupported Octane provenance format")
     evidence = intelligence.retrieve_evidence(proposal_evidence_id)
     if evidence is None or evidence["project_id"] != project_id or evidence["evidence_type"] != "patch_proposal":
         raise ValueError("provenance requires a patch proposal in the selected project")
@@ -29,17 +31,23 @@ def statement(intelligence, project_id, proposal_evidence_id):
     runs = []
     with intelligence._session() as db:
         for identifier in sorted(set(run_ids)):
-            row = db.execute("SELECT id,command_json,image_id,before_hash,after_hash,status,evidence_id FROM execution_runs WHERE id=? AND project_id=?",
+            row = db.execute("SELECT id,command_json,image_id,before_hash,after_hash,status,evidence_id,result_json FROM execution_runs WHERE id=? AND project_id=?",
                              (identifier, project_id)).fetchone()
             if row is None:
                 raise ValueError("proposal execution provenance is incomplete")
-            runs.append({"id": row["id"], "status": row["status"], "image_id": row["image_id"],
-                         "command_sha256": hashlib.sha256(row["command_json"].encode()).hexdigest(),
-                         "before_hash": row["before_hash"], "after_hash": row["after_hash"],
-                         "evidence_id": row["evidence_id"]})
+            observation = intelligence.retrieve_evidence(row["evidence_id"])
+            if observation is None or observation["project_id"] != project_id:
+                raise ValueError("proposal execution evidence is missing from the ledger")
+            run = {"id": row["id"], "status": row["status"], "image_id": row["image_id"],
+                   "command_sha256": hashlib.sha256(row["command_json"].encode()).hexdigest(),
+                   "before_hash": row["before_hash"], "after_hash": row["after_hash"], "evidence_id": row["evidence_id"]}
+            if format_version == 2:
+                run.update(result_sha256=hashlib.sha256(_canonical(json.loads(row["result_json"]))).hexdigest(),
+                           observation_sha256=hashlib.sha256(_canonical(observation["payload"])).hexdigest())
+            runs.append(run)
     return {"_type": "https://in-toto.io/Statement/v1",
             "subject": [{"name": "patch.diff", "digest": {"sha256": hashlib.sha256(proposal["patch"].encode()).hexdigest()}}],
-            "predicateType": "https://github.com/tempothrone-star/Octane/provenance/v1",
+            "predicateType": "https://github.com/tempothrone-star/Octane/provenance/v" + str(format_version),
             "predicate": {"project_id": project_id, "revision": evidence["revision"],
                           "proposal_id": proposal["proposal_id"], "proposal_evidence_id": proposal_evidence_id,
                           "snapshot_hash": proposal["snapshot_hash"], "candidate_hash": proposal["candidate_hash"],
@@ -61,7 +69,7 @@ def sign_statement(value, private_key_path: Path, password=None):
                             "sig": base64.b64encode(key.sign(_pae(payload))).decode()}]}
 
 
-def verify_envelope(envelope, public_key_path: Path, expected_patch_hash=None):
+def verify_envelope(envelope, public_key_path: Path, expected_patch_hash=None, *, intelligence=None, rebuild=False):
     from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -93,4 +101,45 @@ def verify_envelope(envelope, public_key_path: Path, expected_patch_hash=None):
         subject.get("digest", {}).get("sha256") == expected_patch_hash for subject in value.get("subject", [])
     ):
         raise ValueError("signed statement does not identify the expected patch")
-    return {"signature_verified": True, "key_id": key_id, "statement": value}
+    ledger_verified = rebuild_statement(value, intelligence) if rebuild else None
+    return {"signature_verified": True, "ledger_verified": ledger_verified, "key_id": key_id, "statement": value}
+
+
+def rebuild_statement(value, intelligence):
+    if intelligence is None:
+        raise ValueError("ledger rebuild verification requires an existing PIL database")
+    predicate = value.get("predicate", {})
+    versions = {"https://github.com/tempothrone-star/Octane/provenance/v1": 1,
+                "https://github.com/tempothrone-star/Octane/provenance/v2": 2}
+    if value.get("predicateType") not in versions:
+        raise ValueError("unsupported Octane provenance predicate for rebuild verification")
+    with intelligence._transaction():
+        rebuilt = statement(intelligence, predicate.get("project_id"), predicate.get("proposal_evidence_id"),
+                            format_version=versions[value["predicateType"]])
+    if _canonical(rebuilt) != _canonical(value):
+        differences = _differences(value, rebuilt)
+        raise ValueError("signed provenance differs from the ledger at: " + ", ".join(differences[:20]))
+    return True
+
+
+def _differences(left, right, prefix=""):
+    if type(left) is not type(right):
+        return [prefix or "/"]
+    if isinstance(left, dict):
+        result = []
+        for key in sorted(left.keys() | right.keys()):
+            path = prefix + "/" + str(key)
+            result.extend([path] if key not in left or key not in right else _differences(left[key], right[key], path))
+            if len(result) >= 20:
+                break
+        return result
+    if isinstance(left, list):
+        if len(left) != len(right):
+            return [prefix]
+        result = []
+        for index, (before, after) in enumerate(zip(left, right)):
+            result.extend(_differences(before, after, prefix + "/" + str(index)))
+            if len(result) >= 20:
+                break
+        return result
+    return [] if left == right else [prefix or "/"]

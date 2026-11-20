@@ -85,6 +85,19 @@ class WorkspaceHardeningTests(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(database.stat().st_mode), 0o600)
         self.assertEqual(stat.S_IMODE(self.root.stat().st_mode), root_mode)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX mode bits")
+    def test_opening_database_tightens_existing_wal_and_shared_memory_files(self):
+        from octane.storage import prepare_database
+        database = self.root / "existing.sqlite3"
+        files = [database, Path(str(database) + "-wal"), Path(str(database) + "-shm")]
+        for path in files:
+            path.write_bytes(b"existing private state")
+            path.chmod(0o666)
+        prepare_database(database)
+        for path in files:
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+            self.assertEqual(path.read_bytes(), b"existing private state")
+
     def test_missing_host_uid_requires_an_operator_opt_in(self):
         with patch("octane.workspace.os", SimpleNamespace()):
             with self.assertRaisesRegex(RuntimeError, "allowDefaultContainerUser"):
@@ -146,12 +159,13 @@ class WorkspaceHardeningTests(unittest.TestCase):
 
     def test_nested_tests_configs_and_fixture_paths_are_classified(self):
         for name in ("test_root.py", "pkg/tests/test_a.py", "pkg/__tests__/file.ts", "pkg/spec/a.rb",
-                     "native/a_test.go", "src/FooTest.java", "a.phpt", "fixture/data.bin", "pyproject.toml"):
+                     "native/a_test.go", "src/FooTest.java", "a.phpt", "fixture/data.bin"):
             if name.startswith("fixture/"):
                 continue
             with self.subTest(path=name):
                 self.assertTrue(is_test_path(name))
         self.assertFalse(is_test_path("src/main.py"))
+        self.assertFalse(is_test_path("pyproject.toml"))
         with self.assertRaisesRegex(ValueError, "symlinks"):
             link = self.root / "test_link.py"
             link.symlink_to(self.root / "source.py")

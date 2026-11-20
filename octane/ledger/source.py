@@ -7,6 +7,8 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from ..host_environment import git_arguments, git_environment
+
 from collections import Counter, defaultdict
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
@@ -253,22 +255,22 @@ def recent_project_changes(root: Path, limit: int = 5) -> Tuple[List[str], Optio
     """Return unique paths from recent commits, then worktree/index changes."""
     root = root.resolve()
     try:
-        probe = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-                               capture_output=True, text=True, timeout=2, check=False)
+        probe = subprocess.run(git_arguments(root, "rev-parse", "--show-toplevel"),
+                               capture_output=True, text=True, timeout=2, check=False, env=git_environment())
         if probe.returncode or not probe.stdout.strip():
             return [], "Git unavailable; recent-change baseline omitted"
         git_root = Path(probe.stdout.strip()).resolve()
         prefix = root.relative_to(git_root).as_posix()
         prefix = "" if prefix == "." else prefix.rstrip("/") + "/"
         commands = [
-            ["git", "-C", str(git_root), "log", "-n", str(limit), "--format=", "--name-only", "-z", "--diff-filter=ACMR"],
-            ["git", "-C", str(git_root), "diff", "--name-only", "-z", "HEAD"],
-            ["git", "-C", str(git_root), "diff", "--cached", "--name-only", "-z"],
+            git_arguments(git_root, "log", "-n", str(limit), "--format=", "--name-only", "-z", "--diff-filter=ACMR"),
+            git_arguments(git_root, "diff", "--name-only", "-z", "HEAD"),
+            git_arguments(git_root, "diff", "--cached", "--name-only", "-z"),
         ]
         ordered: List[str] = []
         seen = set()
         for command in commands:
-            result = subprocess.run(command, capture_output=True, timeout=3, check=False)
+            result = subprocess.run(command, capture_output=True, timeout=3, check=False, env=git_environment())
             if result.returncode:
                 continue
             for raw in result.stdout.decode("utf-8", "surrogateescape").split("\0"):
@@ -278,8 +280,8 @@ def recent_project_changes(root: Path, limit: int = 5) -> Tuple[List[str], Optio
                 if rel not in seen and ".." not in PurePosixPath(rel).parts:
                     seen.add(rel); ordered.append(rel)
         # Include untracked files without parsing the ambiguous human status format.
-        result = subprocess.run(["git", "-C", str(git_root), "ls-files", "--others", "--exclude-standard", "-z"],
-                                capture_output=True, timeout=3, check=False)
+        result = subprocess.run(git_arguments(git_root, "ls-files", "--others", "--exclude-standard", "-z"),
+                                capture_output=True, timeout=3, check=False, env=git_environment())
         if result.returncode == 0:
             for raw in result.stdout.decode("utf-8", "surrogateescape").split("\0"):
                 if not raw or (prefix and not raw.startswith(prefix)):

@@ -40,16 +40,7 @@ def _source_scope(root, path, source):
     return files[:_MAX_FILES], partial
 
 
-def repair_focus(root: Path, path: str | None, query: str | None, limit: int, language_servers=None) -> dict:
-    if query is not None and (not isinstance(query, str) or not 1 <= len(query.strip()) <= 160):
-        raise ValueError("focus query must be a symbol name of 1 to 160 characters")
-    if path is None and query is None:
-        raise ValueError("focus requires a source path or symbol name")
-    if type(limit) is not int or not 1 <= limit <= 20:
-        raise ValueError("focus limit must be an integer from 1 to 20")
-    query = query.strip().replace("::", ".").casefold() if query else None
-    source, polygraph = analyzer()
-    items, truncated = _source_scope(root, path, source)
+def _focus_contents(root, items, query, path, truncated):
     total, examined, contents, files = 0, 0, {}, []
     marker = query.rsplit(".", 1)[-1] if query and path is None else ""
     ascii_marker = marker.encode("ascii") if marker.isascii() else None
@@ -78,17 +69,10 @@ def repair_focus(root: Path, path: str | None, query: str | None, limit: int, la
         contents[item["path"]] = raw
         files.append(item)
 
-    graph = polygraph.build_dependency_graph(root, snapshot=({"files": files, "truncated": False}, contents))
-    python = {name: raw for name, raw in contents.items() if name.lower().endswith((".py", ".pyi"))}
-    symbols, calls, errors = analyze_python(python, "working-copy")
-    extra, extra_calls, coverage = analyze_syntax_calls(polygraph.ast_backend, files, contents, "working-copy", graph["edges"])
-    symbols += extra
-    calls += extra_calls
-    semantic_symbols, semantic_edges, semantic_coverage = semantic_calls(
-        root, files, contents, "working-copy", symbols, language_servers)
-    symbols = list({node["node_key"]: node for node in symbols + semantic_symbols}.values())
-    resolved = {key for item in semantic_coverage.values() for key in item["analyzed_callers"]}
-    calls = [edge for edge in calls if edge["source"] not in resolved] + semantic_edges
+    return contents, files, examined, total, truncated
+
+
+def _focus_connections(symbols, calls, query, limit, truncated):
     matches = [node for node in symbols if query is None or query in node["name"].casefold()]
     matches.sort(key=lambda node: (node["name"].casefold() != query,
                                    node["name"].casefold().rsplit(".", 1)[-1] != query,
@@ -111,9 +95,35 @@ def repair_focus(root: Path, path: str | None, query: str | None, limit: int, la
         related[begin], related[end] = caller, callee
         diagram[key] = None
         connections.append({"caller": caller, "callee": callee, "line": key[2], "basis": edge["metadata"]["basis"]})
+    return selected, connections, related, diagram, truncated or len(matches) > limit
+
+
+def repair_focus(root: Path, path: str | None, query: str | None, limit: int, language_servers=None) -> dict:
+    if query is not None and (not isinstance(query, str) or not 1 <= len(query.strip()) <= 160):
+        raise ValueError("focus query must be a symbol name of 1 to 160 characters")
+    if path is None and query is None:
+        raise ValueError("focus requires a source path or symbol name")
+    if type(limit) is not int or not 1 <= limit <= 20:
+        raise ValueError("focus limit must be an integer from 1 to 20")
+    query = query.strip().replace("::", ".").casefold() if query else None
+    source, polygraph = analyzer()
+    items, truncated = _source_scope(root, path, source)
+    contents, files, examined, total, truncated = _focus_contents(root, items, query, path, truncated)
+    graph = polygraph.build_dependency_graph(root, snapshot=({"files": files, "truncated": False}, contents))
+    python = {name: raw for name, raw in contents.items() if name.lower().endswith((".py", ".pyi"))}
+    symbols, calls, errors = analyze_python(python, "working-copy")
+    extra, extra_calls, coverage = analyze_syntax_calls(polygraph.ast_backend, files, contents, "working-copy", graph["edges"])
+    symbols += extra
+    calls += extra_calls
+    semantic_symbols, semantic_edges, semantic_coverage = semantic_calls(
+        root, files, contents, "working-copy", symbols, language_servers)
+    symbols = list({node["node_key"]: node for node in symbols + semantic_symbols}.values())
+    resolved = {key for item in semantic_coverage.values() for key in item["analyzed_callers"]}
+    calls = [edge for edge in calls if edge["source"] not in resolved] + semantic_edges
+    selected, connections, related, diagram, truncated = _focus_connections(symbols, calls, query, limit, truncated)
     return {"status": "ready" if selected else "no_matching_symbol", "files_examined": examined,
             "files_analyzed": len(contents), "bytes_read": total,
             "symbols": list(selected.values()), "connections": connections, "mermaid": call_plot(related, diagram),
             "coverage": coverage, "language_servers": semantic_coverage,
-            "python_parse_errors": len(errors), "truncated": truncated or len(matches) > limit,
+            "python_parse_errors": len(errors), "truncated": truncated,
             "basis": "Bounded static candidates from the working copy. Confirm the path with a focused reproduction."}

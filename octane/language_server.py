@@ -11,20 +11,39 @@ import threading
 import time
 from urllib.parse import unquote, urlsplit
 
+from .host_environment import language_server_environment
+from .db_support import _scrub_sensitive_text
+
 
 class LanguageServer:
-    def __init__(self, command, root: Path, timeout=45):
+    def __init__(self, command, root: Path, timeout=45, environment_keys=()):
         if (not isinstance(command, list) or not command or len(command) > 32
                 or any(not isinstance(value, str) or not value or "\0" in value for value in command)):
             raise ValueError("language server commands must be explicit non-empty argument arrays")
         self.deadline = time.monotonic() + timeout
         self.process = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL, start_new_session=os.name == "posix")
+                                        stderr=subprocess.PIPE, env=language_server_environment(environment_keys),
+                                        start_new_session=os.name == "posix")
         self.messages = queue.Queue(maxsize=256)
         self.identifier = 0
         self.writer = None
+        self.stderr_tail = bytearray()
+        self.stderr_reader = threading.Thread(target=self._drain_stderr, daemon=True)
+        self.stderr_reader.start()
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
+
+    def _drain_stderr(self):
+        try:
+            for chunk in iter(lambda: os.read(self.process.stderr.fileno(), 4096), b""):
+                self.stderr_tail.extend(chunk)
+                del self.stderr_tail[:-8192]
+        except OSError:
+            return
+
+    @property
+    def diagnostics(self):
+        return _scrub_sensitive_text(bytes(self.stderr_tail).decode("utf-8", "replace"))
 
     def _read(self):
         try:
@@ -123,10 +142,18 @@ class LanguageServer:
         if self.writer is not None:
             self.writer.join(timeout=2)
         if self.writer is None or not self.writer.is_alive():
-            self.process.stdin.close()
+            try:
+                self.process.stdin.close()
+            except BrokenPipeError:
+                # Buffered stdin may flush during close after a failed server exited.
+                # Preserve the original provider failure and continue draining diagnostics.
+                pass
         self.reader.join(timeout=2)
         if not self.reader.is_alive():
             self.process.stdout.close()
+        self.stderr_reader.join(timeout=2)
+        if not self.stderr_reader.is_alive():
+            self.process.stderr.close()
 
 
 def _definitions(items):
@@ -176,7 +203,8 @@ def semantic_calls(root, files, contents, revision, known, servers, limit=50):
             options = {"disableAutomaticTypingAcquisition": True}
             if isinstance(definition, dict):
                 options.update(definition.get("initializationOptions", {}))
-            server = LanguageServer(command, root)
+            extra_keys = definition.get("environmentAllowlist", []) if isinstance(definition, dict) else []
+            server = LanguageServer(command, root, environment_keys=extra_keys)
             server.request("initialize", {"processId": None, "rootUri": root.as_uri(),
                 "workspaceFolders": [{"uri": root.as_uri(), "name": root.name}],
                 "capabilities": {"textDocument": {"callHierarchy": {"dynamicRegistration": False},
@@ -230,4 +258,6 @@ def semantic_calls(root, files, contents, revision, known, servers, limit=50):
         finally:
             if server is not None:
                 server.close()
+                if "fallback" in status and server.diagnostics:
+                    status["diagnostics"] = server.diagnostics
     return list(nodes.values()), list(edges.values()), coverage

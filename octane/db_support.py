@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from .host_environment import git_arguments, git_environment
 
 def _id(prefix: str) -> str:
     return f"{prefix}-{uuid.uuid4().hex}"
@@ -39,8 +40,8 @@ def _scrub_sensitive_text(value: str) -> str:
 
 def _git_remote_url(root: Path) -> str | None:
     try:
-        result = subprocess.run(["git", "-C", str(root), "remote", "get-url", "origin"],
-                                capture_output=True, text=True, timeout=2, check=True)
+        result = subprocess.run(git_arguments(root, "remote", "get-url", "origin"),
+                                capture_output=True, text=True, timeout=2, check=True, env=git_environment())
     except (OSError, subprocess.SubprocessError):
         return None
     value = result.stdout.strip()

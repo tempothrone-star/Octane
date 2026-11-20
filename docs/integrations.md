@@ -30,7 +30,7 @@ Configure an MCP client to launch this process:
 }
 ```
 
-The installed npm executable is `octane-mcp`. Optional `allowedTools` restricts the exposed tool names; omission exposes all twelve. Project containment, approved images, permission-scoped actors, immutable image IDs, and sandbox execution use the same Python bridge as OpenClaw. MCP assigns the runtime identity `mcp-stdio`; arguments cannot impersonate another actor. Protocol messages alone go to stdout. No HTTP server is started. Two SDK client tests cover tool discovery, real calls, invalid arguments, and policy denial. Individual MCP hosts have not all been certified; configure their request timeout to cover long mutation, bisect, or evaluation calls.
+The installed npm executable is `octane-mcp`. Optional `allowedTools` restricts the exposed tool names; omission exposes all twelve. Project containment, approved images, permission-scoped actors, immutable image IDs, and sandbox execution use the same Python bridge as OpenClaw. MCP derives a stable sanitized actor label from handshake client name/version, with a hash to distinguish names that sanitize alike. An absent client identity falls back to `mcp-stdio`. Optional `mcpSessionSuffix: true` adds a fresh process/session UUID; a short safe string selects an operator-provided suffix. Client metadata is self-reported attribution and grants no additional permissions; tool arguments cannot select the runtime actor. Protocol messages alone go to stdout. No HTTP server is started. SDK client tests cover tool discovery, real calls, invalid arguments, and policy denial. Individual MCP hosts have not all been certified; configure their request timeout to cover long mutation, bisect, or evaluation calls.
 
 ## Semantic Python and TypeScript relationships
 
@@ -45,7 +45,10 @@ Add to the OpenClaw plugin configuration or MCP configuration:
 ```json
 {
   "languageServers": {
-    "python": ["/srv/octane-lsp/node_modules/.bin/pyright-langserver", "--stdio"],
+    "python": {
+      "command": ["/srv/octane-lsp/node_modules/.bin/pyright-langserver", "--stdio"],
+      "environmentAllowlist": ["XDG_CACHE_HOME"]
+    },
     "typescript": {
       "command": ["/srv/octane-lsp/node_modules/.bin/typescript-language-server", "--stdio"],
       "initializationOptions": {
@@ -56,7 +59,7 @@ Add to the OpenClaw plugin configuration or MCP configuration:
 }
 ```
 
-`scan` and working-copy `focus` request document symbols and outgoing call hierarchy. Successful semantic results replace candidate call edges for the analyzed callers. Edges carry `basis: "LSP call hierarchy"` and the provider. Missing, unsupported, or timed-out providers retain explicitly labeled static fallback and coverage gaps. Providers have bounded requests and output, including a deadline when a server stops reading input; POSIX cleanup terminates its private process group. Servers are trusted host executables configured by the operator, may read project configuration, and are separate from project execution containers. Install and configure them only for trusted analysis environments. Octane does not discover executable commands from repository files. Dynamic calls, generated code, foreign-language boundaries, and incomplete server analysis can still leave gaps. Live tests resolve Python and TypeScript imports across files.
+`scan` and working-copy `focus` request document symbols and outgoing call hierarchy. Successful semantic results replace candidate call edges for the analyzed callers. Edges carry `basis: "LSP call hierarchy"` and the provider. Missing, unsupported, or timed-out providers retain explicitly labeled static fallback and coverage gaps. Providers have bounded requests and output, including a deadline when a server stops reading input; POSIX cleanup terminates its private process group. The server environment defaults to PATH, HOME, LANG, LC_ALL, TMPDIR, TMP, TEMP, SYSTEMROOT, and WINDIR when present. Per-provider `environmentAllowlist` explicitly forwards additional variable names (up to 32), without accepting secret values in plugin config. Bounded stderr diagnostics retain the last 8 KiB and are scrubbed before returning failure details. Servers are trusted host executables configured by the operator, may read project configuration, and are separate from project execution containers. Install and configure them only for trusted analysis environments. Octane does not discover executable commands from repository files. Dynamic calls, generated code, foreign-language boundaries, and incomplete server analysis can still leave gaps. Live tests resolve Python and TypeScript imports across files.
 
 ## Structured reports and per-line coverage
 
@@ -91,9 +94,21 @@ The report file is a bounded output mount outside the source tree. Requested rep
 
 Reports are limited to 4 MB and 10,000 top-level records. Coverage line expansion is bounded. XML entities and document types are rejected; mapped source paths stay within the project. Sentry imports retain exception type and source frames; OTEL imports retain span identity, name, status, and source path. Arbitrary request, user, and resource attributes are omitted. These are file imports, not live telemetry subscriptions.
 
+SARIF export is available through `octane_evidence` action `sarif` (`projectId`, optional `evidenceIds`, optional `limit`), or the native CLI:
+
+```sh
+python3 -m octane native export-sarif PROJECT_ID --database /srv/octane-state/pil.sqlite3 --output /srv/reports/octane.sarif.json
+```
+
+Exported SARIF 2.1.0 contains recorded findings, bounded source locations, and properties for evidence ID, revision, verification status, and staleness. It preserves the evidence's verification level and does not promote imported findings into independently verified defects. No automatic code-scanning upload is performed.
+
 ## Original checks and mutation experiments
 
-Candidate executions overlay baseline test directories, fixtures, and known test configuration as read-only mounts. Every run records their fingerprint. Proposals reject test-like edits by default. `allowTestChanges: true` requires nonempty `testChangesRationale` and records affected paths; the candidate still runs against the original checks. Newly added tests belong in a separately reviewed baseline; the proposal gate supports text edits to existing files. A filename classifier cannot recognize every embedded assertion or custom test convention. Keep the independent reproduction and intent evidence explicit.
+Candidate executions overlay baseline test directories, fixtures, and pure test configuration as read-only mounts. Every run records their fingerprint. Proposals reject test-like edits by default. `allowTestChanges: true` requires nonempty `testChangesRationale` and records affected paths; the candidate still runs against the original checks. Newly added tests belong in a separately reviewed baseline; the proposal gate supports text edits to existing files. A filename classifier cannot recognize every embedded assertion or custom test convention. Keep the independent reproduction and intent evidence explicit.
+
+Build/configuration files are reviewed separately. Set `allowBuildChanges: true` and a specific `buildChangesRationale` on **each candidate run and the proposal**. JSON, TOML, and INI files produce parsed changed-key diffs; the proposal binds these to the recorded candidate executions. Recognizable test scripts, test-runner options, and test-target controls cannot be changed by this override. Ordinary dependency and build metadata edits can take effect in the candidate. Files under test directories remain pure tests even when named `package.json`.
+
+`pom.xml` and Gradle formats currently receive an explicit text-diff review record rather than a structural key diff. Inspect their test selection independently and compare actual executed test IDs or traces. The override is recorded permission for the reviewed change; it cannot prove arbitrary build scripts preserved their checks. Malformed supported structured formats are rejected, rather than silently treated as opaque text.
 
 After a passing candidate run tied to a current investigation:
 
@@ -101,7 +116,7 @@ After a passing candidate run tied to a current investigation:
 {"action":"mutate","workspaceId":"WS-…","candidateRunId":"RUN-…","mutationLimit":5}
 ```
 
-Mutation experiments run in disposable snapshots using the candidate's immutable image, original checks, command, and trace/report settings. The bounded built-in operators revert changed source and mutate Python constants, comparisons, or arithmetic. The result records killed, survived, inconclusive, score, individual run IDs, and whether tested source reversions reproduce the failure. Attach the returned evidence ID to the proposal's `evidenceIds`. The gate validates candidate/image/test bindings and requires the tested original-source reversions to be detected. The score covers only the selected mutants, not all paths or all changed files. External mutmut/Stryker/PIT imports remain separately attributed report evidence.
+Mutation experiments run in disposable snapshots using the candidate's immutable image, original checks, command, and trace/report settings. The bounded built-in operators revert supported changed source and mutate Python constants/comparisons/arithmetic or JavaScript/TypeScript syntax-tree operators and numeric literals. JS/TS uses the existing optional `ast` parser extra on the host; actual project checks still run inside the sandbox. The result records overall `completed`, `partial`, `unavailable`, or `inconclusive` status, per-path support, killed/survived/inconclusive outcomes, score, individual run IDs, and whether tested source reversions reproduce the failure. Attach the returned evidence ID to the proposal's `evidenceIds`. The gate validates candidate/image/test bindings and requires the tested original-source reversions to be detected. Unsupported source languages (including Go) produce `unavailable` and no score. A timed-out or otherwise inconclusive experiment also has no overall score. Mixed-language support is explicitly partial. Proposals report support even if no mutation run was attached. The score covers only the selected supported mutants, not all paths or all changed files. External mutmut/Stryker/PIT imports remain separately attributed report evidence. No-coverage mutants count as surviving; unknown/timed-out imported outcomes make the overall imported score inconclusive.
 
 ## Property and differential preservation checks
 
@@ -127,7 +142,7 @@ Rules are `idempotent`, `roundtrip`, and `differential`. The latter two require 
 }
 ```
 
-Git metadata and safe source archives are handled on the host in temporary storage. Every project check runs in the configured container, with bad-revision baseline tests overlaid across revisions and one pinned image. The good endpoint must exit 0 and the bad endpoint 1. Other exits, timeouts, and cleanup failures are skipped. Completion recognizes both older Git output and the quoted bad-term format used by newer Git. The result reports the first bad commit only when the search completes; ambiguous histories and exhausted budgets remain incomplete. Builds must fit the explicit command and offline image. No worktree is checked out over the user's project. Native CLI: `octane native bisect --help`.
+Native archive/apply/bisect calls require Git 2.32+ (the release that introduced `GIT_CONFIG_GLOBAL`). Host Git receives a minimal environment, disables user/system configuration and terminal credential prompts, and overrides fsmonitor, hooks, and the pack-objects hook. Portable checkout Git calls use the same environment and command overrides. Git metadata and safe source archives are handled on the host in temporary storage. Every project check runs in the configured container, with bad-revision baseline tests overlaid across revisions and one pinned image. The good endpoint must exit 0 and the bad endpoint 1. Other exits, timeouts, and cleanup failures are skipped. Completion recognizes both older Git output and the quoted bad-term format used by newer Git. The result reports the first bad commit only when the search completes; ambiguous histories and exhausted budgets remain incomplete. Builds must fit the explicit command and offline image. No worktree is checked out over the user's project. Native CLI: `octane native bisect --help`.
 
 ## GitHub evidence and publication
 
@@ -155,7 +170,23 @@ python3 -m octane native provenance PROJECT_ID PROPOSAL_EVIDENCE_ID --database /
 python3 -m octane native verify-provenance /srv/attestations/patch.dsse.json --public-key /srv/keys/trusted-public.pem --patch-sha256 EXPECTED_DIFF_SHA256
 ```
 
-Without `--key`, the export is an unsigned statement. The subject binds the exact patch bytes; the predicate records source/candidate hashes, image ID, execution statuses and command hashes, and proposal-evidence hash. `octane_evidence` action `attest` exports only an unsigned statement. Private keys are never tool parameters. Verification requires a separately selected trusted public key and detects altered payloads, wrong keys, and unexpected patch digests. This is in-toto/DSSE with a custom Octane predicate, not a Sigstore transparency-log claim or independent proof that the recorded observations were true.
+Without `--key`, the export is an unsigned statement. The subject binds the exact patch bytes; the predicate records source/candidate hashes, image ID, execution statuses and command hashes, and proposal-evidence hash. `octane_evidence` action `attest` exports only an unsigned statement. Private keys are never tool parameters. Verification requires a separately selected trusted public key and detects altered payloads, wrong keys, and unexpected patch digests. This is in-toto/DSSE with a custom Octane predicate, not independent proof that the recorded observations were true.
+
+Add `--rebuild --database /srv/octane-state/pil.sqlite3` to verification to re-derive the signed statement under a consistent ledger transaction. Verification fails when signed runs, results, proposal evidence, or referenced observations disagree with the ledger or are missing. New predicate v2 binds result JSON and observation payload digests. Historical predicate v1 remains verifiable within its original narrower signed fields; it did not sign full result/observation payload digests. Missing trust databases are refused rather than initialized.
+
+Signing keys belong in operator-owned private files outside project roots (for example mode 0600 under a private directory). For encrypted PEM keys use `--key-password-prompt`, or `--key-password-env NAME` to read a password from an explicitly named host environment variable. Password values are never command arguments, model tool inputs, or evidence. Rotate by selecting a new trusted public key and keeping old public keys for historical envelopes; stop new signing with retired private keys. Octane does not maintain a global key revocation registry.
+
+### Optional keyless Sigstore workflow
+
+Export an unsigned Octane statement, then use an installed and trusted Cosign directly for keyless signing and its OIDC interaction:
+
+```sh
+python3 -m octane native provenance PROJECT_ID PROPOSAL_EVIDENCE_ID --database /srv/octane-state/pil.sqlite3 --output /srv/attestations/statement.json
+cosign sign-blob /srv/attestations/statement.json --bundle /srv/attestations/statement.sigstore.json
+python3 -m octane native verify-provenance /srv/attestations/statement.json --sigstore-bundle /srv/attestations/statement.sigstore.json --certificate-identity EXPECTED_EXACT_IDENTITY --certificate-oidc-issuer EXPECTED_EXACT_ISSUER --rebuild --database /srv/octane-state/pil.sqlite3
+```
+
+The verification adapter uses Cosign `verify-blob` over frozen bounded copies, requires an exact identity and issuer, and retains standard trust and transparency-log verification. It provides no insecure-skip or identity-regex shortcuts. Host trust-root retrieval may use networking; project execution containers remain offline. Signing may publish certificate identity and artifact hashes to public transparency infrastructure and is an explicit operator action. The adapter has policy/transport regression tests using controlled responses; a live OIDC signing session has not been validated here. [Cosign blob signing](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/), [verification](https://docs.sigstore.dev/cosign/verifying/verify/).
 
 ## Rootless Podman and gVisor
 
@@ -183,3 +214,5 @@ The November 20 validation replayed one real historical Blinker fix: [maintainer
 - [Podman run and user namespaces](https://docs.podman.io/en/latest/markdown/podman-run.1.html).
 
 - [Git bisect completion implementation](https://github.com/git/git/blob/master/bisect.c).
+
+- [Git 2.32 configuration environment changes](https://github.com/git/git/blob/v2.32.0/Documentation/RelNotes/2.32.0.txt).

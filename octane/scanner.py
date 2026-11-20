@@ -70,42 +70,8 @@ class ProjectScanner:
                 ev = intelligence.submit_evidence(project_id, "file_scan", {"sha256": hashes[rel]},
                                                    "Source bytes hashed and statically indexed", scanner["id"], revision, rel)
                 evidence_by_path[rel] = ev["id"]
-            nodes = [{"node_key": "file:" + item["path"], "kind": "file", "name": Path(item["path"]).name,
-                      "path": item["path"], "language": item["language"], "revision": revision,
-                      "metadata": {"sha256": hashes[item["path"]], "owner": "native-scanner"}}
-                     for item in inventory["files"]] + symbols
-            edges = [{"source": "file:" + edge["source"], "target": "file:" + edge["target"], "kind": "imports",
-                      "confidence": 0.7, "metadata": {"line": edge["line"], "basis": edge["basis"], "cross_language": edge["cross_language"]},
-                      "evidence_id": evidence_by_path.get(edge["source"])} for edge in graph["edges"]]
-            edges += [{"source": "file:" + node["path"], "target": node["node_key"], "kind": "defines",
-                       "confidence": 1.0, "evidence_id": evidence_by_path.get(node["path"])} for node in symbols]
-            symbol_paths = {node["node_key"]: node["path"] for node in symbols}
-            for call in calls:
-                call["evidence_id"] = evidence_by_path.get(symbol_paths[call["source"]])
-            edges += calls
-            edges_by_key = {}
-            for edge in edges:
-                key = (edge["source"], edge["target"], edge["kind"])
-                previous_edge = edges_by_key.get(key)
-                if previous_edge:
-                    metadata = previous_edge["metadata"]
-                    lines = metadata.get("lines", [metadata["line"]])
-                    metadata["lines"] = sorted(set(lines + [edge["metadata"]["line"]]))
-                else:
-                    edges_by_key[key] = edge
-            edges = list(edges_by_key.values())
-            # Reconcile only obsolete scanner-owned structure; an unchanged scan
-            # must not manufacture edge-history entries or delete agent findings.
-            keys = {node["node_key"] for node in nodes}
-            for row in db.execute("SELECT id,node_key FROM graph_nodes WHERE project_id=? AND metadata_json LIKE ?",
-                                  (project_id, '%"owner": "native-scanner"%')).fetchall():
-                if row["node_key"] not in keys:
-                    db.execute("UPDATE graph_nodes SET stale=1 WHERE id=?", (row["id"],))
-            for edge in db.execute("SELECT e.*,s.node_key AS source_key,t.node_key AS target_key FROM graph_edges e JOIN graph_nodes s ON s.id=e.source_id JOIN graph_nodes t ON t.id=e.target_id WHERE e.project_id=? AND e.provenance_agent_id=? AND e.stale=0",
-                                   (project_id, scanner["id"])).fetchall():
-                if (edge["source_key"], edge["target_key"], edge["kind"]) not in edges_by_key:
-                    intelligence._archive_graph_edge(db, edge)
-                    db.execute("UPDATE graph_edges SET stale=1 WHERE id=?", (edge["id"],))
+            nodes, edges, edges_by_key = self._graph_records(inventory, hashes, revision, symbols, graph, calls, evidence_by_path)
+            self._reconcile_graph(db, intelligence, project_id, scanner, nodes, edges_by_key)
             intelligence.update_graph(project_id, nodes, edges, scanner["id"])
             for error in parse_errors:
                 if error["path"] in changed:
@@ -186,3 +152,46 @@ class ProjectScanner:
                 data = stream.read(max_file_bytes + 1)
             if hashlib.sha256(data).hexdigest() != digest:
                 raise ValueError("source changed during indexing; retry the scan")
+
+    @staticmethod
+    def _graph_records(inventory, hashes, revision, symbols, graph, calls, evidence_by_path):
+        nodes = [{"node_key": "file:" + item["path"], "kind": "file", "name": Path(item["path"]).name,
+                  "path": item["path"], "language": item["language"], "revision": revision,
+                  "metadata": {"sha256": hashes[item["path"]], "owner": "native-scanner"}}
+                 for item in inventory["files"]] + symbols
+        edges = [{"source": "file:" + edge["source"], "target": "file:" + edge["target"], "kind": "imports",
+                  "confidence": 0.7, "metadata": {"line": edge["line"], "basis": edge["basis"], "cross_language": edge["cross_language"]},
+                  "evidence_id": evidence_by_path.get(edge["source"])} for edge in graph["edges"]]
+        edges += [{"source": "file:" + node["path"], "target": node["node_key"], "kind": "defines",
+                   "confidence": 1.0, "evidence_id": evidence_by_path.get(node["path"])} for node in symbols]
+        symbol_paths = {node["node_key"]: node["path"] for node in symbols}
+        for call in calls:
+            call["evidence_id"] = evidence_by_path.get(symbol_paths[call["source"]])
+        edges += calls
+        edges_by_key = {}
+        for edge in edges:
+            key = (edge["source"], edge["target"], edge["kind"])
+            previous_edge = edges_by_key.get(key)
+            if previous_edge:
+                metadata = previous_edge["metadata"]
+                lines = metadata.get("lines", [metadata["line"]])
+                metadata["lines"] = sorted(set(lines + [edge["metadata"]["line"]]))
+            else:
+                edges_by_key[key] = edge
+        edges = list(edges_by_key.values())
+        return nodes, edges, edges_by_key
+
+    @staticmethod
+    def _reconcile_graph(db, intelligence, project_id, scanner, nodes, edges_by_key):
+        # Reconcile only obsolete scanner-owned structure; an unchanged scan
+        # must not manufacture edge-history entries or delete agent findings.
+        keys = {node["node_key"] for node in nodes}
+        for row in db.execute("SELECT id,node_key FROM graph_nodes WHERE project_id=? AND metadata_json LIKE ?",
+                              (project_id, '%"owner": "native-scanner"%')).fetchall():
+            if row["node_key"] not in keys:
+                db.execute("UPDATE graph_nodes SET stale=1 WHERE id=?", (row["id"],))
+        for edge in db.execute("SELECT e.*,s.node_key AS source_key,t.node_key AS target_key FROM graph_edges e JOIN graph_nodes s ON s.id=e.source_id JOIN graph_nodes t ON t.id=e.target_id WHERE e.project_id=? AND e.provenance_agent_id=? AND e.stale=0",
+                               (project_id, scanner["id"])).fetchall():
+            if (edge["source_key"], edge["target_key"], edge["kind"]) not in edges_by_key:
+                intelligence._archive_graph_edge(db, edge)
+                db.execute("UPDATE graph_edges SET stale=1 WHERE id=?", (edge["id"],))

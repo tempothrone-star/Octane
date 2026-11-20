@@ -19,7 +19,7 @@ octane = "octane.__main__:main"
 dev = ["ruff==0.17.6", "coverage==7.17.3"]
 provenance = ["cryptography>=46,<51"]
 testing = ["hypothesis>=6.140,<7"]
-ast = ["tree-sitter-languages==1.10.2", "tree-sitter==0.21.3"]
+ast = ["tree-sitter-languages==1.10.2", "tree-sitter==0.26.1"]
 
 [tool.setuptools.packages.find]
 include = ["octane*"]

@@ -161,3 +161,5 @@ npm test
 [CI](.github/workflows/tests.yml) exercises the local CLI on Python 3.9, the full suite on Python 3.11, 3.12, and 3.14, optional parsing, Node bridge and packaging, Docker repair/mutation/bisect/report/property checks, live language servers, offline signature tests, curated lint, and coverage gates. See the [architecture](docs/architecture.md), [workflow](docs/openclaw.md), and [implementation limits](docs/implementation-and-limitations.md).
 
 The [November 20 audit closure](docs/audit-hardening.md) covers output scrubbing, container crash deadlines/recovery, parser failures, UTF-8 XML, host-server trust and the remaining deployment limits.
+
+The [project website guide](website/README.md) explains how to build the public documentation and source browser, serve it with Nginx, and provide HTTPS access through Cloudflare Tunnel.

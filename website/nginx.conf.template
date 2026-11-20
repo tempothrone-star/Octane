@@ -1,0 +1,33 @@
+worker_processes 1;
+pid "@STATE@/nginx.pid";
+error_log "@STATE@/error.log" warn;
+events { worker_connections 512; }
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log "@STATE@/access.log";
+    server_tokens off;
+    sendfile on;
+    gzip on;
+    gzip_types text/plain text/css application/javascript application/json image/svg+xml;
+    server {
+        listen 127.0.0.1:8080;
+        server_name _;
+        root "@PUBLIC@";
+        index index.html;
+        autoindex off;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Referrer-Policy strict-origin-when-cross-origin always;
+        add_header X-Frame-Options DENY always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'" always;
+        location ~ (^|/)\. { return 404; }
+        location ~* \.(env|db|sqlite3|pem|key)$ { return 404; }
+        # Generated, escaped HTML includes public .github/.gitignore sources.
+        location ^~ /source/ { try_files $uri $uri/ =404; }
+        location / { try_files $uri $uri/ =404; }
+        error_page 404 /404.html;
+        location = /404.html { internal; }
+        location /assets/ { expires 1h; }
+        location = /health.txt { access_log off; }
+    }
+}

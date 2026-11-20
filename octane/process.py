@@ -8,6 +8,20 @@ import threading
 import time
 
 
+def wait_unreaped(process, timeout):
+    """Keep the leader PID reserved until its private group has been signaled."""
+    if os.name != 'posix' or not hasattr(os, 'waitid'):
+        return process.wait(timeout=timeout)
+    deadline = time.monotonic() + timeout
+    while True:
+        state = os.waitid(os.P_PID, process.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if state is not None:
+            return state.si_status if state.si_code == os.CLD_EXITED else -state.si_status
+        if time.monotonic() >= deadline:
+            raise subprocess.TimeoutExpired(process.args, timeout)
+        time.sleep(0.005)
+
+
 def run_bounded(arguments, *, timeout=60, limit=4_000_000, cwd=None, env=None):
     buffers = {"stdout": bytearray(), "stderr": bytearray()}
     overflow = set()
@@ -27,11 +41,11 @@ def run_bounded(arguments, *, timeout=60, limit=4_000_000, cwd=None, env=None):
     for reader in readers:
         reader.start()
     try:
-        code = process.wait(timeout=timeout)
+        code = wait_unreaped(process, timeout)
     finally:
         # A finished integration may have left descendants holding its pipes open.
         # Kill its private process group before draining, including on timeout.
-        if os.name == "posix":
+        if os.name == "posix" and process.returncode is None:
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:

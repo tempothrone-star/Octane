@@ -19,7 +19,7 @@ The OpenClaw plugin adds checkout triage, candidate function relationships, runt
 
 - Static edges describe potential calls or imports. Resolve ambiguity from source and test execution. Dynamic dispatch, overloads, and cross-language calls can leave gaps.
 - Runtime traces observe the selected command and supported process. Sampling may miss short calls. A passing test establishes the behavior its assertions checked.
-- Patch proposals require current intent evidence, a matched failing-to-passing reproduction, and passing checks for preserved behavior. Proposals cover text edits to existing files. Review the diff and test coverage before applying it to the requested checkout.
+- Patch proposals require current intent evidence, a matched failing-to-passing reproduction, and passing checks for preserved behavior. Proposals cover regular text-file edits, additions and deletions; mode changes, symlinks and binary patches remain rejected. Review the diff and test coverage before applying it to the requested checkout.
 - Docker or configured rootless Podman experiments require an eligible local image with the needed tools and dependencies. Container networking is disabled. OpenClaw tool policy and allowed checkout roots govern access.
 
 ## Portable localization benchmark
@@ -63,3 +63,7 @@ A minimal fake LSP peer exercises host transport and semantic paths without exte
 ## 1.0.0 diagnosis and final validation
 
 The [accuracy workflow](accuracy-workflow.md) documents ordered Python numeric traces, language-neutral imported spectra/ordered traces, flaky-test exclusion, analyzer attribution, low-confidence syntax patterns, test ordering, operator-owned holdout checks, current-proposal ranking, and exact paired-median optimization decisions. The same twelve tools expose them. The executed seeded harness checks mechanics; broad real-world accuracy and the secondary research proposals remain unmeasured or unimplemented.
+
+## November 20 security audit
+
+The [audit closure](audit-hardening.md) records the ten numbered findings, crash-recovery validation and remaining architectural limitations. Host LSP providers now need explicit trusted-project opt-in. Append-time ledger verification checks the anchor/tail and unanchored suffix; run `verify-log` and `rebuild-check` for full historical verification. Grammar wheels have migrated to the offline bundled 0.13 language pack with the current QueryCursor API.

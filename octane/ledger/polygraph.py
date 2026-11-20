@@ -340,7 +340,7 @@ def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
 def _python_imports(path: str, text: str) -> Tuple[List[Tuple[str, int, int, bool]], int]:
     try:
         tree = ast.parse(text, filename=path)
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return [], 1
     results: List[Tuple[str, int, int, bool]] = []
     group = 0

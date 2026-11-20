@@ -24,7 +24,7 @@ def bisect_project(manager, project_id, good, bad, command, image, agent_id, bud
     good = resolve_revision(repository, good)
     bad = resolve_revision(repository, bad)
     git(repository, "merge-base", "--is-ancestor", good, bad)
-    results = []
+    results, skipped_paths = [], []
     image_id = None
     with tempfile.TemporaryDirectory(prefix="octane-bisect-") as directory:
         base = Path(directory)
@@ -33,12 +33,12 @@ def bisect_project(manager, project_id, good, bad, command, image, agent_id, bud
         git(history, "init", "--bare", "-q")
         git(history, "fetch", "--quiet", str(repository), good, bad)
         git(history, "update-ref", "HEAD", bad)
-        tests = export_revision(repository, bad, base / "tests")
+        tests = export_revision(repository, bad, base / "tests", skipped_paths=skipped_paths)
         _, overlays = baseline_tests(tests)
 
         def check(revision):
             nonlocal image_id
-            checkout = export_revision(repository, revision, base / revision)
+            checkout = export_revision(repository, revision, base / revision, skipped_paths=skipped_paths)
             for relative in overlays:
                 original, target = tests / relative, checkout / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -72,7 +72,7 @@ def bisect_project(manager, project_id, good, bad, command, image, agent_id, bud
         first_bad = _first_bad(output)
         completed = first_bad is not None
     payload = {"good": good, "bad": bad, "first_bad": first_bad, "completed": completed,
-               "runs": results, "command": command, "image": image, "image_id": image_id,
+               "runs": results, "skipped_archive_paths": skipped_paths, "command": command, "image": image, "image_id": image_id,
                "basis": "Same baseline tests over archived revisions, executed in the configured container engine"}
     evidence = manager.intelligence.submit_evidence(project_id, "bisect_result", payload,
         "Container-backed Git bisect", agent_id, project["revision"], verification_status="observed")

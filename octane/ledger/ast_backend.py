@@ -7,21 +7,20 @@ or executes project code. Grammar coverage depends on the bundled wheel.
 from __future__ import annotations
 
 import re
-import warnings
 from functools import lru_cache
 from typing import List, Optional, Tuple
 
 try:
-    from tree_sitter_languages import get_parser as _get_parser
+    from tree_sitter_language_pack import get_parser as _get_parser
 except ImportError:  # The optional parser extra is intentionally not required.
     _get_parser = None
 
 # This wheel bundles compiled grammars. Keep this mapping explicit rather than
 # loading parser code, grammar paths, or plugins supplied by analyzed projects.
 _GRAMMARS = {
-    "bash": "bash", "shell": "bash", "c": "c", "cpp": "cpp", "csharp": "c_sharp",
+    "bash": "bash", "shell": "bash", "c": "c", "cpp": "cpp", "csharp": "csharp",
     "css": "css", "dockerfile": "dockerfile", "elisp": "elisp", "elixir": "elixir",
-    "elm": "elm", "embedded_template": "embedded_template", "erlang": "erlang", "fortran": "fortran",
+    "elm": "elm", "embedded_template": "embeddedtemplate", "erlang": "erlang", "fortran": "fortran",
     "go": "go", "haskell": "haskell", "hack": "hack", "hcl": "hcl", "html": "html", "java": "java",
     "javascript": "javascript", "julia": "julia", "json": "json", "kotlin": "kotlin",
     "lisp": "commonlisp", "lua": "lua", "make": "make", "markdown": "markdown", "ocaml": "ocaml",
@@ -61,12 +60,8 @@ def _parser(grammar: str):
     if _get_parser is None:
         return None
     try:
-        # tree-sitter-languages 1.10.x uses the older Language constructor API.
-        # Suppress only its deprecation warning; incompatibility falls back cleanly.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", FutureWarning)
-            return _get_parser(grammar)
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+        return _get_parser(grammar)
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, LookupError):
         return None
 
 
@@ -97,7 +92,7 @@ def parse_tree(language: str, source_path: str, text: str):
     try:
         tree = parser.parse(source)
         return tree, source, grammar
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, LookupError):
         return None
 
 
@@ -144,7 +139,7 @@ def parse_imports(language: str, source_path: str, text: str,
                     continue
             stack.extend(reversed(node.children))
         return imports, bool(root.has_error), root.type
-    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError, LookupError):
         # Parsing a file must never prevent read-only heuristic analysis of the
         # rest of the project (malformed files and parser ABI mismatches included).
         return None
@@ -153,3 +148,11 @@ def parse_imports(language: str, source_path: str, text: str,
 def bundled_grammars() -> List[str]:
     """Language IDs with a configured grammar mapping (not a promise all are installed)."""
     return sorted(_GRAMMARS)
+
+
+def query_captures(grammar, query, node):
+    """Use the current QueryCursor API with the engine's bundled grammar provider."""
+    from tree_sitter import Query, QueryCursor
+    from tree_sitter_language_pack import get_language
+    captures = QueryCursor(Query(get_language(grammar), query)).captures(node)
+    return [(node, name) for name, nodes in captures.items() for node in nodes]

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
@@ -33,9 +34,18 @@ def _source(value, root):
 
 
 def _xml(raw):
-    if b"<!DOCTYPE" in raw.upper() or b"<!ENTITY" in raw.upper():
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeError as exc:
+        raise ValueError("XML reports must use UTF-8") from exc
+    if "\0" in text or "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
         raise ValueError("XML reports must not declare entities or a document type")
-    return ET.fromstring(raw)
+    declaration = re.match(r"\s*<\?xml\b[^?]*\?>", text[:300], re.I)
+    if declaration is not None:
+        encoding = re.search(r'encoding\s*=\s*([\"\'])(.*?)\1', declaration[0], re.I)
+        if encoding is not None and encoding[2].casefold() != "utf-8":
+            raise ValueError("XML reports must use UTF-8")
+    return ET.fromstring(text)
 
 
 def _junit(raw, root):

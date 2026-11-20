@@ -12,8 +12,8 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    # The bundled grammar loader uses the pre-0.22 Python API. A newer runtime
-    # requires a coordinated loader/grammar migration, not a standalone bump.
+    # 0.13 ships offline grammars; 1.x downloads parsers at runtime.
+    # Upgrade together with the parser/query API and offline-loader review.
     ignore:
-      - dependency-name: "tree-sitter"
-        versions: [">=0.22.0"]
+      - dependency-name: "tree-sitter-language-pack"
+        versions: [">=1.0.0"]

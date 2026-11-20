@@ -61,7 +61,7 @@ class LanguageServerProtocolTests(unittest.TestCase):
         files=[{'path':'main.py','language':'python'}]
         contents={'main.py':(self.root/'main.py').read_bytes()}
         known=[{'node_key':'symbol:main.py:entry','path':'main.py','line':1,'name':'entry','language':'python'}]
-        servers={'python':{'command':[sys.executable,str(PEER.resolve())],'initializationOptions':{},'environmentAllowlist':[]}}
+        servers={'python':{'trustedProject':True,'command':[sys.executable,str(PEER.resolve())],'initializationOptions':{},'environmentAllowlist':[]}}
         nodes,edges,coverage=semantic_calls(self.root,files,contents,'revision',known,servers,limit=1)
         self.assertTrue(edges)
         self.assertTrue(all(edge['metadata']['basis']=='LSP call hierarchy' for edge in edges))

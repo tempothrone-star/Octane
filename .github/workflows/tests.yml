@@ -31,15 +31,33 @@ jobs:
 
   optional-parser:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13", "3.14"]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - run: python -m pip install '.[ast]'
       - run: python -m unittest discover -s tests -v
+
+  portable-host:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - run: python -m pip install '.[provenance]'
+      - run: python -m unittest tests.test_octane_redaction tests.test_reports tests.test_host_environment tests.test_language_server_protocol tests.test_integrations -q
 
   bridge-and-package:
     runs-on: ubuntu-latest
@@ -78,6 +96,7 @@ jobs:
       - run: coverage combine
       - run: coverage report --include='octane/workspace.py' --fail-under=78
       - run: coverage report --include='octane/mutation.py' --fail-under=95
+      - run: coverage report --include='octane/container_lifecycle.py' --fail-under=85
 
   quality:
     runs-on: ubuntu-latest
@@ -101,6 +120,8 @@ jobs:
       - run: coverage report --include='octane/storage.py' --fail-under=100
       - run: coverage report --include='octane/provenance.py' --fail-under=90
       - run: coverage report --include='octane/process.py' --fail-under=90
+      - run: coverage report --include='octane/redaction.py' --fail-under=95
+      - run: coverage report --include='octane/ledger/append_integrity.py' --fail-under=95
       - run: coverage report --include='octane/language_server.py' --fail-under=85
       - run: coverage report --include='octane/localization.py' --fail-under=95
       - run: coverage report --include='octane/holdout.py' --fail-under=90

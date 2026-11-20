@@ -130,7 +130,7 @@ class PatchGateTests(unittest.TestCase):
         comparison = self.manager.compare_workspace(self.candidate["id"])
         variants = [
             {**comparison, "patch": ""},
-            {**comparison, "differences": [{"path": "source.py", "kind": "added"}]},
+            {**comparison, "differences": [{"path": "source.py", "kind": "mode_changed"}]},
             {**comparison, "differences": [{"path": "source.py", "kind": "modified", "binary": True}]},
         ]
         for item in variants:

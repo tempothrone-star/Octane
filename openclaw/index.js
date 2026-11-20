@@ -13,7 +13,7 @@ const configSchema = Type.Object({
   holdoutPolicy: Type.Optional(Type.String({ minLength: 1 })),
   languageServers: Type.Optional(Type.Record(Type.String(), Type.Union([
     Type.Array(Type.String()),
-    Type.Object({ command: Type.Array(Type.String()), initializationOptions: Type.Optional(Type.Record(Type.String(), Type.Any())), environmentAllowlist: Type.Optional(Type.Array(Type.String())) }),
+    Type.Object({ command: Type.Array(Type.String()), trustedProject: Type.Optional(Type.Boolean()), initializationOptions: Type.Optional(Type.Record(Type.String(), Type.Any())), environmentAllowlist: Type.Optional(Type.Array(Type.String())) }),
   ]))),
   databasePath: Type.Optional(Type.String({ minLength: 1 })),
   workspaceRoot: Type.Optional(Type.String({ minLength: 1 })),

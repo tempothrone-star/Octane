@@ -43,6 +43,11 @@ class WorkspaceOperations:
         )
         return {"patched": True}
 
+    def _op_workspace_remove(self, p: dict[str, Any]) -> dict[str, bool]:
+        manager, _ = self._workspace(_required(p, "workspaceId", str))
+        manager.remove_candidate_file(p['workspaceId'], _required(p, 'relativePath', str))
+        return {'removed': True}
+
     def _op_workspace_compare(self, p: dict[str, Any]) -> dict[str, Any]:
         manager, _ = self._workspace(_required(p, "workspaceId", str))
         return manager.compare_workspace(p["workspaceId"])

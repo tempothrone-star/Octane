@@ -30,7 +30,7 @@ Configure an MCP client to launch this process:
 }
 ```
 
-The installed npm executable is `octane-mcp`. Optional `allowedTools` restricts the exposed tool names; omission exposes all twelve. Project containment, approved images, permission-scoped actors, immutable image IDs, and sandbox execution use the same Python bridge as OpenClaw. MCP derives a stable sanitized actor label from handshake client name/version, with a hash to distinguish names that sanitize alike. An absent client identity falls back to `mcp-stdio`. Optional `mcpSessionSuffix: true` adds a fresh process/session UUID; a short safe string selects an operator-provided suffix. Client metadata is self-reported attribution and grants no additional permissions; tool arguments cannot select the runtime actor. Protocol messages alone go to stdout. No HTTP server is started. SDK client tests cover tool discovery, real calls, invalid arguments, and policy denial. Individual MCP hosts have not all been certified; configure their request timeout to cover long mutation, bisect, or evaluation calls.
+The installed npm executable is `octane-mcp`. Optional `allowedTools` restricts the exposed tool names; omission exposes all twelve. Project containment, approved images, permission-scoped actors, immutable image IDs, and sandbox execution use the same Python bridge as OpenClaw. MCP derives a stable sanitized actor label from handshake client name/version, with a hash to distinguish names that sanitize alike. An absent client identity falls back to `mcp-stdio`. By default, a fresh process/connection UUID isolates clients that report identical names/versions. Explicit `mcpSessionSuffix: false` opts into stable shared attribution; a short safe string selects an operator-provided suffix. The suffix also applies when the client supplies no name. Client metadata is self-reported attribution and grants no additional permissions; tool arguments cannot select the runtime actor. Protocol messages alone go to stdout. No HTTP server is started. SDK client tests cover tool discovery, real calls, invalid arguments, and policy denial. Individual MCP hosts have not all been certified; configure their request timeout to cover long mutation, bisect, or evaluation calls.
 
 ## Semantic Python and TypeScript relationships
 
@@ -47,10 +47,12 @@ Add to the OpenClaw plugin configuration or MCP configuration:
   "languageServers": {
     "python": {
       "command": ["/srv/octane-lsp/node_modules/.bin/pyright-langserver", "--stdio"],
-      "environmentAllowlist": ["XDG_CACHE_HOME"]
+      "environmentAllowlist": ["XDG_CACHE_HOME"],
+      "trustedProject": true
     },
     "typescript": {
       "command": ["/srv/octane-lsp/node_modules/.bin/typescript-language-server", "--stdio"],
+      "trustedProject": true,
       "initializationOptions": {
         "tsserver": {"path": "/srv/octane-lsp/node_modules/typescript/lib/tsserver.js"}
       }
@@ -59,7 +61,7 @@ Add to the OpenClaw plugin configuration or MCP configuration:
 }
 ```
 
-`scan` and working-copy `focus` request document symbols and outgoing call hierarchy. Successful semantic results replace candidate call edges for the analyzed callers. Edges carry `basis: "LSP call hierarchy"` and the provider. Missing, unsupported, or timed-out providers retain explicitly labeled static fallback and coverage gaps. Providers have bounded requests and output, including a deadline when a server stops reading input; POSIX cleanup terminates its private process group. The server environment defaults to PATH, HOME, LANG, LC_ALL, TMPDIR, TMP, TEMP, SYSTEMROOT, and WINDIR when present. Per-provider `environmentAllowlist` explicitly forwards additional variable names (up to 32), without accepting secret values in plugin config. Bounded stderr diagnostics retain the last 8 KiB and are scrubbed before returning failure details. Servers are trusted host executables configured by the operator, may read project configuration, and are separate from project execution containers. Install and configure them only for trusted analysis environments. Octane does not discover executable commands from repository files. Dynamic calls, generated code, foreign-language boundaries, and incomplete server analysis can still leave gaps. Live tests resolve Python and TypeScript imports across files.
+Host providers require an object definition with explicit `trustedProject: true`; legacy command arrays and omitted/false trust flags retain static fallback without starting a process. The flag trusts all checkouts analyzed through that provider, so grant it only when every applicable allowed root has trusted project configuration/plugins. `scan` and working-copy `focus` request document symbols and outgoing call hierarchy. Successful semantic results replace candidate call edges for the analyzed callers. Edges carry `basis: "LSP call hierarchy"` and the provider. Missing, unsupported, or timed-out providers retain explicitly labeled static fallback and coverage gaps. Providers have bounded requests and output, including a deadline when a server stops reading input; POSIX cleanup terminates its private process group. The server environment defaults to PATH, HOME, LANG, LC_ALL, TMPDIR, TMP, TEMP, SYSTEMROOT, and WINDIR when present. Per-provider `environmentAllowlist` explicitly forwards additional variable names (up to 32), without accepting secret values in plugin config. Bounded stderr diagnostics retain the last 8 KiB and are scrubbed before returning failure details. Servers are trusted host executables configured by the operator, may read project configuration, and are separate from project execution containers. Install and configure them only for trusted analysis environments. Octane does not discover executable commands from repository files. Dynamic calls, generated code, foreign-language boundaries, and incomplete server analysis can still leave gaps. Live tests resolve Python and TypeScript imports across files.
 
 ## Structured reports and per-line coverage
 
@@ -104,7 +106,7 @@ Exported SARIF 2.1.0 contains recorded findings, bounded source locations, and p
 
 ## Original checks and mutation experiments
 
-Candidate executions overlay baseline test directories, fixtures, and pure test configuration as read-only mounts. Every run records their fingerprint. Proposals reject test-like edits by default. `allowTestChanges: true` requires nonempty `testChangesRationale` and records affected paths; the candidate still runs against the original checks. Newly added tests belong in a separately reviewed baseline; the proposal gate supports text edits to existing files. A filename classifier cannot recognize every embedded assertion or custom test convention. Keep the independent reproduction and intent evidence explicit.
+Candidate executions overlay baseline test directories, fixtures, and pure test configuration as read-only mounts. Every run records their fingerprint. Proposals reject test-like edits by default. `allowTestChanges: true` requires nonempty `testChangesRationale` and records affected paths; the candidate still runs against the original checks. Newly added tests belong in a separately reviewed baseline; the proposal gate supports regular text files, including additions and deletions. Mutations currently require edits to existing source files. A filename classifier cannot recognize every embedded assertion or custom test convention. Keep the independent reproduction and intent evidence explicit.
 
 Build/configuration files are reviewed separately. Set `allowBuildChanges: true` and a specific `buildChangesRationale` on **each candidate run and the proposal**. JSON, TOML, and INI files produce parsed changed-key diffs; the proposal binds these to the recorded candidate executions. Recognizable test scripts, test-runner options, and test-target controls cannot be changed by this override. Ordinary dependency and build metadata edits can take effect in the candidate. Files under test directories remain pure tests even when named `package.json`.
 

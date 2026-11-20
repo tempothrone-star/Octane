@@ -138,7 +138,7 @@ class PythonAdapter:
                                         language="python", revision=revision)
         try:
             tree = ast.parse(data, filename=rel)
-        except (SyntaxError, UnicodeDecodeError) as exc:
+        except (SyntaxError, UnicodeError, ValueError, RecursionError, MemoryError) as exc:
             if rel in changed:
                 intelligence.submit_evidence(project_id, "parse_error", {"error": str(exc)},
                     "Python source could not be parsed", agent_id=scanner["id"], revision=revision,

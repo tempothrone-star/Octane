@@ -40,7 +40,7 @@ class HostEnvironmentTests(unittest.TestCase):
             root = Path(directory)
             command = [sys.executable, '-c', "import sys; print('API_KEY=synthetic-secret',file=sys.stderr)"]
             _, _, status = semantic_calls(root, [{'path': 'app.py', 'language': 'python'}],
-                                         {'app.py': b'def entry(): pass'}, 'r', [], {'python': command})
+                                         {'app.py': b'def entry(): pass'}, 'r', [], {'python': {'command':command,'trustedProject':True}})
             self.assertIn('diagnostics', status['python'])
             self.assertNotIn('synthetic-secret', status['python']['diagnostics'])
 

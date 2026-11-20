@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -41,6 +42,10 @@ class WorkspaceHardeningTests(unittest.TestCase):
         self.pil = ProjectIntelligence(self.base / "state/pil.sqlite3")
         self.project = self.pil.create_project("hardening", self.root)["id"]
         self.manager = WorkspaceManager(self.pil, self.base / "workspaces")
+        # Lifecycle recovery has separate real-Docker tests; these tests inspect policy arguments.
+        self.addCleanup(patch.stopall)
+        patch("octane.workspace.reap_expired", return_value=[]).start()
+        patch("octane.workspace.execution_guard", side_effect=lambda *args: nullcontext()).start()
 
     def test_secret_patterns_are_absent_from_snapshots_and_hashes(self):
         original = _tree_hash(self.root)

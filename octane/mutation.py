@@ -13,10 +13,12 @@ from .mutation_support import javascript_mutants, mutation_support
 from .workspace import WorkspaceManager
 
 
-def _python_mutants(text, lines):
+def _python_mutants(text, lines, on_error=None):
     try:
         tree = ast.parse(text)
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
+        if on_error is not None:
+            on_error(exc)
         return
     for index, node in enumerate(ast.walk(tree)):
         if getattr(node, "lineno", None) not in lines:
@@ -59,7 +61,8 @@ def mutation_candidates(manager, workspace_id, limit):
             continue
         mutants.append({"id": _id("MUT"), "path": relative, "operator": "original-source",
                         "content": (originals / relative).read_text()})
-        local = (_python_mutants(patches[relative], _changed_lines(change.get("diff", ""))) if relative.casefold().endswith(".py")
+        local = (_python_mutants(patches[relative], _changed_lines(change.get("diff", "")),
+                                 lambda exc, path=relative: _record_parse_error(manager, workspace, path, exc)) if relative.casefold().endswith(".py")
                  else javascript_mutants(patches[relative], relative, _changed_lines(change.get("diff", ""))))
         for operator, content in local:
             mutants.append({"id": _id("MUT"), "path": relative, "operator": operator, "content": content})
@@ -127,3 +130,12 @@ def run_mutations(manager: WorkspaceManager, workspace_id, candidate_run_id, age
     for item in results:
         intelligence.link_evidence(evidence["id"], item["evidence_id"], "context", agent_id)
     return {"evidence_id": evidence["id"], **payload}
+
+
+def _record_parse_error(manager, workspace, path, error):
+    intelligence = manager.intelligence
+    actor = intelligence.get_or_register_agent(workspace['project_id'], 'mutation-parser', 'syntax observer', [], ['write_evidence'])
+    return intelligence.submit_evidence(workspace['project_id'], 'parse_error',
+        {'path': path, 'error': type(error).__name__, 'stage': 'mutation_generation'},
+        'Python mutation operators unavailable for this file; source reversion remains separate', actor['id'],
+        workspace['base_revision'], path)

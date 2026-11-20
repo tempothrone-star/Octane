@@ -74,7 +74,7 @@ def analyze_python(sources, revision):
         try:
             tree = ast.parse(content, filename=path)
             table = symtable.symtable(content, path, "exec")
-        except (SyntaxError, UnicodeError, ValueError) as error:
+        except (SyntaxError, UnicodeError, ValueError, RecursionError, MemoryError) as error:
             errors.append({"path": path, "error": str(error)})
             continue
         module = _module(path)

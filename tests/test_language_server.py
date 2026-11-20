@@ -70,8 +70,8 @@ class LanguageServerTests(unittest.TestCase):
     def test_real_pyright_and_typescript_resolve_calls_through_imports(self):
         prefix = Path(os.environ["OCTANE_LSP_TEST_TOOLS"]) / "node_modules"
         servers = {
-            "python": [str(prefix / ".bin/pyright-langserver"), "--stdio"],
-            "typescript": {
+            "python": {"command": [str(prefix / ".bin/pyright-langserver"), "--stdio"], "trustedProject": True},
+            "typescript": {"trustedProject": True,
                 "command": [str(prefix / ".bin/typescript-language-server"), "--stdio"],
                 "initializationOptions": {"tsserver": {"path": str(prefix / "typescript/lib/tsserver.js")}},
             },

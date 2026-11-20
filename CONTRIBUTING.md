@@ -30,6 +30,8 @@ COVERAGE_FILE="$PWD/.coverage" COVERAGE_RCFILE="$PWD/.coveragerc" .venv/bin/cove
 
 Use a GitHub no-reply email for new commits when you want to keep a personal address out of public history.
 
-CI separately gates original-test protection/storage at 100%, provenance/host transport at 90%, and Docker workspace/mutation at 78%/95%. Run `.venv/bin/python scripts/check_complexity.py` to check the five reviewed orchestration functions. Use separate coverage data-file prefixes when running independent coverage jobs concurrently. See [CHANGELOG.md](CHANGELOG.md) for the 0.2.0 release scope.
+CI separately gates original-test protection/storage at 100%, provenance/host transport at 90%, and Docker workspace/mutation at 78%/95%. Run `.venv/bin/python scripts/check_complexity.py` to check all production Python functions against the global limit and committed baseline. Use separate coverage data-file prefixes when running independent coverage jobs concurrently. See [CHANGELOG.md](CHANGELOG.md) for the 0.2.0 release scope.
 
 The optional parser uses the tested pair `tree-sitter-languages==1.10.2` and `tree-sitter==0.21.3`. The bundled loader calls `Language(path, name)` and `Parser.set_language`; runtime 0.22+ changes that API. Dependabot excludes those incompatible standalone runtime updates until the loader and grammar bundle are migrated together. Validate future parser changes with `pip install '.[ast]'` and the optional-parser suite; disabling that job or silently accepting heuristic fallback does not validate a parser upgrade.
+
+Run the fake-server tests with `python -m unittest tests.test_language_server_protocol tests.test_host_environment`; they require no LSP installation. CI requires 85% coverage for `language_server.py`. Lower complexity baseline entries when refactors improve them; do not raise a baseline ceiling to pass CI. See [polish measurement details](docs/polish-review.md).

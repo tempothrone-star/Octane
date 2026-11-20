@@ -65,6 +65,7 @@ def main() -> None:
     verification_backend.add_argument("--sigstore-bundle", type=Path)
     verify.add_argument("--certificate-identity")
     verify.add_argument("--certificate-oidc-issuer")
+    verify.add_argument("--trusted-root", type=Path, help="operator-authenticated Sigstore trust root")
     verify.add_argument("--patch-sha256")
     verify.add_argument("--rebuild", action="store_true", help="re-derive and compare the signed statement from the ledger")
     verify.add_argument("--database", type=Path)
@@ -93,7 +94,8 @@ def main() -> None:
         ledger = ProjectIntelligence(args.database) if args.rebuild else None
         if args.sigstore_bundle is not None:
             result = verify_sigstore(args.envelope, args.sigstore_bundle, args.certificate_identity,
-                                     args.certificate_oidc_issuer, intelligence=ledger, rebuild=args.rebuild)
+                                     args.certificate_oidc_issuer, intelligence=ledger, rebuild=args.rebuild,
+                                     trusted_root=args.trusted_root)
             if args.patch_sha256 and not any(subject.get("digest",{}).get("sha256")==args.patch_sha256
                                             for subject in result["statement"].get("subject",[])):
                 parser.error("signed statement does not identify the expected patch")

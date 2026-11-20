@@ -6,6 +6,8 @@ Ask **“Fix a bug.”** The workflow finds a baseline check, looks for evidence
 
 Release 0.2.0 adds explicit build-change review, JS/TS mutation support, isolated host integration environments, distinct MCP client attribution, ledger-backed signature verification, and SARIF export. See the [changelog](CHANGELOG.md) and [follow-up review](docs/follow-up-review.md).
 
+The 0.2.1 [polish follow-up](docs/polish-review.md) extends complexity enforcement across production Python, adds fake-provider coverage, and tightens Cosign compatibility and offline trust handling.
+
 ## Install
 
 Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on the Gateway host. Docker is used for isolated execution; rootless Podman and configured gVisor adapters are also available.

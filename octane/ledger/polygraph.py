@@ -153,112 +153,146 @@ def _can_start_regex(tokens: Sequence[Tuple[str, str, int]]) -> bool:
     return value in {"=", "(", "[", "{", ",", ":", ";", "!", "?", "=>", "&&", "||", "??", "&", "|", "^", "~", "<", ">"}
 
 
-def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
-    """Recognize static dependency forms while ignoring comments and literals."""
-    if language in ("c", "cpp"):
-        # The anchored directive form avoids mistaking strings for includes.
-        clean = re.sub(r"(?m)^\s*//.*$", "", text)
-        clean = re.sub(r"/\*.*?\*/", lambda match: "\n" * match.group(0).count("\n"), clean, flags=re.S)
-        return [(match.group(1), clean.count("\n", 0, match.start()) + 1)
-                for match in re.finditer(r'(?m)^\s*#\s*include\s*"([^"\n]+)"', clean)]
-    tokens = _tokens(text, hash_comments=language in ("ruby",), slash_regex=language in ("javascript", "typescript", "ruby"))
-    results: List[Tuple[str, int]] = []
-    i = 0
-    while i < len(tokens):
-        kind, value, line = tokens[i]
-        next_token = tokens[i + 1] if i + 1 < len(tokens) else ("", "", line)
-        if language in ("javascript", "typescript"):
-            if kind == "identifier" and value in ("import", "export"):
-                j = i + 1
-                if value == "import" and next_token[1] == "(" and j + 1 < len(tokens):
+def _c_imports(text):
+    # The anchored directive form avoids mistaking strings for includes.
+    clean = re.sub(r"(?m)^[ \t]*//.*$", "", text)
+    clean = re.sub(r"/\*.*?\*/", lambda match: "\n" * match.group(0).count("\n"), clean, flags=re.S)
+    return [(match.group(1), clean.count("\n", 0, match.start(1)) + 1)
+            for match in re.finditer(r'(?m)^\s*#\s*include\s*"([^"\n]+)"', clean)]
+
+
+def _javascript_imports(tokens, i):
+    results = []
+    kind, value, line = tokens[i]
+    next_token = tokens[i + 1] if i + 1 < len(tokens) else ("", "", line)
+    if kind == 'identifier' and value in ('import', 'export'):
+        j = i + 1
+        if value == 'import' and next_token[1] == '(' and (j + 1 < len(tokens)):
+            item = _quoted_token(tokens[j + 1])
+            if item:
+                results.append(item)
+        elif next_token[0] == 'string':
+            item = _quoted_token(next_token)
+            if item:
+                results.append(item)
+        else:
+            while j < len(tokens) and j < i + 100 and (tokens[j][1] != ';'):
+                if j > i + 1 and tokens[j][0] == 'identifier' and (tokens[j][1] in ('import', 'export')):
+                    break
+                if tokens[j][0] == 'identifier' and tokens[j][1] == 'from' and (j + 1 < len(tokens)):
                     item = _quoted_token(tokens[j + 1])
                     if item:
                         results.append(item)
-                elif next_token[0] == "string":
-                    item = _quoted_token(next_token)
-                    if item:
-                        results.append(item)
-                else:
-                    while j < len(tokens) and j < i + 100 and tokens[j][1] != ";":
-                        if j > i + 1 and tokens[j][0] == "identifier" and tokens[j][1] in ("import", "export"):
-                            break
-                        if tokens[j][0] == "identifier" and tokens[j][1] == "from" and j + 1 < len(tokens):
-                            item = _quoted_token(tokens[j + 1])
-                            if item:
-                                results.append(item)
-                            break
-                        j += 1
-            elif kind == "identifier" and value == "require" and next_token[1] == "(" and i + 2 < len(tokens):
-                item = _quoted_token(tokens[i + 2])
+                    break
+                j += 1
+    elif kind == 'identifier' and value == 'require' and (next_token[1] == '(') and (i + 2 < len(tokens)):
+        item = _quoted_token(tokens[i + 2])
+        if item:
+            results.append(item)
+    return results
+
+
+def _go_imports(tokens, i):
+    results = []
+    kind, value, line = tokens[i]
+    next_token = tokens[i + 1] if i + 1 < len(tokens) else ("", "", line)
+    if kind == 'identifier' and value == 'import':
+        if next_token[1] == '(':
+            j = i + 2
+            while j < len(tokens) and tokens[j][1] != ')':
+                item = _quoted_token(tokens[j])
                 if item:
                     results.append(item)
-        elif language == "go":
-            if kind == "identifier" and value == "import":
-                if next_token[1] == "(":
-                    j = i + 2
-                    while j < len(tokens) and tokens[j][1] != ")":
-                        item = _quoted_token(tokens[j])
-                        if item:
-                            results.append(item)
-                        j += 1
-                else:
-                    item = _quoted_token(next_token)
-                    if item:
-                        results.append(item)
-        elif language == "java":
-            if kind == "identifier" and value == "import":
-                j = i + 1
-                if j < len(tokens) and tokens[j][1] == "static":
-                    j += 1
-                parts: List[str] = []
-                while j < len(tokens) and tokens[j][1] != ";":
-                    if tokens[j][0] == "identifier" or tokens[j][1] == "*":
-                        parts.append(tokens[j][1])
-                    j += 1
-                if parts:
-                    results.append((".".join(parts).replace(".*", ".*"), line))
-        elif language == "rust":
-            if kind == "identifier" and value == "mod" and next_token[0] == "identifier":
-                if i + 2 < len(tokens) and tokens[i + 2][1] == ";":
-                    results.append((next_token[1], line))
-            elif kind == "identifier" and value == "use":
-                j, parts = i + 1, []
-                while j < len(tokens) and tokens[j][1] != ";":
-                    if tokens[j][0] == "identifier" or tokens[j][1] == "::":
-                        parts.append(tokens[j][1])
-                    j += 1
-                if parts:
-                    spec = "".join(parts)
-                    for prefix in ("crate::", "self::", "super::"):
-                        if spec.startswith(prefix):
-                            spec = spec[len(prefix):]
-                    results.append((spec, line))
-        elif language in ("csharp", "kotlin", "scala", "swift"):
-            if kind == "identifier" and value in ("using", "import"):
-                j, parts = i + 1, []
-                while j < len(tokens) and tokens[j][1] not in (";", "{"):
-                    if tokens[j][0] == "identifier" or tokens[j][1] == "*":
-                        parts.append(tokens[j][1])
-                    j += 1
-                if parts:
-                    results.append((".".join(parts), line))
-        elif language == "php":
-            if kind == "identifier" and value.lower() in ("require", "require_once", "include", "include_once"):
-                j = i + 1
-                while j < len(tokens) and j < i + 4 and tokens[j][1] not in (";", ")"):
-                    item = _quoted_token(tokens[j])
-                    if item:
-                        results.append(item)
-                        break
-                    j += 1
-        elif language == "ruby":
-            if kind == "identifier" and value in ("require", "require_relative"):
-                item = _quoted_token(next_token)
-                if item:
-                    results.append(item)
-        i += 1
+                j += 1
+        else:
+            item = _quoted_token(next_token)
+            if item:
+                results.append(item)
+    return results
+
+
+def _java_imports(tokens, i):
+    results = []
+    kind, value, line = tokens[i]
+    if kind == 'identifier' and value == 'import':
+        j = i + 1
+        if j < len(tokens) and tokens[j][1] == 'static':
+            j += 1
+        parts: List[str] = []
+        while j < len(tokens) and tokens[j][1] != ';':
+            if tokens[j][0] == 'identifier' or tokens[j][1] == '*':
+                parts.append(tokens[j][1])
+            j += 1
+        if parts:
+            results.append(('.'.join(parts).replace('.*', '.*'), line))
+    return results
+
+
+def _rust_imports(tokens, i):
+    results = []
+    kind, value, line = tokens[i]
+    next_token = tokens[i + 1] if i + 1 < len(tokens) else ("", "", line)
+    if kind == 'identifier' and value == 'mod' and (next_token[0] == 'identifier'):
+        if i + 2 < len(tokens) and tokens[i + 2][1] == ';':
+            results.append((next_token[1], line))
+    elif kind == 'identifier' and value == 'use':
+        j, parts = (i + 1, [])
+        while j < len(tokens) and tokens[j][1] != ';':
+            if tokens[j][0] == 'identifier' or tokens[j][1] == '::':
+                parts.append(tokens[j][1])
+            j += 1
+        if parts:
+            spec = ''.join(parts)
+            for prefix in ('crate::', 'self::', 'super::'):
+                if spec.startswith(prefix):
+                    spec = spec[len(prefix):]
+            results.append((spec, line))
+    return results
+
+
+def _dotted_imports(tokens, i):
+    results = []
+    kind, value, line = tokens[i]
+    if kind == 'identifier' and value in ('using', 'import'):
+        j, parts = (i + 1, [])
+        while j < len(tokens) and tokens[j][1] not in (';', '{'):
+            if tokens[j][0] == 'identifier' or tokens[j][1] == '*':
+                parts.append(tokens[j][1])
+            j += 1
+        if parts:
+            results.append(('.'.join(parts), line))
+    return results
+
+
+def _php_imports(tokens, i):
+    results = []
+    kind, value, line = tokens[i]
+    if kind == 'identifier' and value.lower() in ('require', 'require_once', 'include', 'include_once'):
+        j = i + 1
+        while j < len(tokens) and j < i + 4 and (tokens[j][1] not in (';', ')')):
+            item = _quoted_token(tokens[j])
+            if item:
+                results.append(item)
+                break
+            j += 1
+    return results
+
+
+def _ruby_imports(tokens, i):
+    results = []
+    kind, value, line = tokens[i]
+    next_token = tokens[i + 1] if i + 1 < len(tokens) else ("", "", line)
+    if kind == 'identifier' and value in ('require', 'require_relative'):
+        item = _quoted_token(next_token)
+        if item:
+            results.append(item)
+    return results
+
+
+def _additional_imports(language, text):
+    results = []
     for pattern in _GENERIC_IMPORT_PATTERNS:
-        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+        results.extend((match.group(1), text.count("\n", 0, match.start(1)) + 1)
                        for match in pattern.finditer(text))
     syntax = LANGUAGE_IMPORT_SYNTAX.get(language, {})
     quoted_keywords = syntax.get("quoted", ())
@@ -266,17 +300,40 @@ def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
     if quoted_keywords:
         keywords = "|".join(re.escape(keyword) for keyword in quoted_keywords)
         pattern = re.compile(r"(?m)^\s*(?:" + keywords + r")\s*(?:\(\s*)?[\"']([^\"'\n]+)[\"']")
-        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+        results.extend((match.group(1), text.count("\n", 0, match.start(1)) + 1)
                        for match in pattern.finditer(text))
     if module_keywords:
         keywords = "|".join(re.escape(keyword) for keyword in module_keywords)
         pattern = re.compile(r"(?m)^\s*(?:" + keywords + r")\s+([A-Za-z_][\w./:-]*)\s*(?:;|$)")
-        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+        results.extend((match.group(1), text.count("\n", 0, match.start(1)) + 1)
                        for match in pattern.finditer(text))
     if syntax.get("from_import"):
         pattern = re.compile(r"(?m)^\s*from\s+([A-Za-z_][\w./:-]*)\s+import\b")
-        results.extend((match.group(1), text.count("\n", 0, match.start()) + 1)
+        results.extend((match.group(1), text.count("\n", 0, match.start(1)) + 1)
                        for match in pattern.finditer(text))
+    return results
+
+
+
+_IMPORT_SCANNERS = {
+    "javascript": _javascript_imports, "typescript": _javascript_imports,
+    "go": _go_imports, "java": _java_imports, "rust": _rust_imports,
+    "csharp": _dotted_imports, "kotlin": _dotted_imports, "scala": _dotted_imports, "swift": _dotted_imports,
+    "php": _php_imports, "ruby": _ruby_imports,
+}
+
+
+def _heuristic_imports(language: str, text: str) -> List[Tuple[str, int]]:
+    """Dispatch bounded static import recognition by language."""
+    if language in ("c", "cpp"):
+        return _c_imports(text)
+    tokens = _tokens(text, hash_comments=language == "ruby", slash_regex=language in ("javascript", "typescript", "ruby"))
+    scanner = _IMPORT_SCANNERS.get(language)
+    results = []
+    if scanner is not None:
+        for index in range(len(tokens)):
+            results.extend(scanner(tokens, index))
+    results.extend(_additional_imports(language, text))
     return list(dict.fromkeys(results))
 
 
@@ -336,109 +393,115 @@ def _java_packages(contents: Dict[str, Tuple[str, str]]) -> Dict[str, str]:
     return result
 
 
-def _candidate_paths(spec: str, source_path: str, language: str, root: Path,
-                     contents: Dict[str, Tuple[str, str]], go_module: Optional[str],
-                     java_packages: Dict[str, str]) -> List[str]:
+def _python_candidates(spec, source_dir):
+    candidates = []
+    relative_import = spec.startswith('.')
+    module = spec.lstrip('.') if relative_import else spec
+    parts = module.split('.') if module else []
+    base = PurePosixPath(*parts).as_posix() if parts else ''
+    if relative_import:
+        depth = len(spec) - len(spec.lstrip('.'))
+        prefix = source_dir
+        for _ in range(max(0, depth - 1)):
+            prefix = prefix.parent
+        relative = (prefix / base).as_posix()
+        candidates.extend([relative + '.py', relative + '/__init__.py'])
+    else:
+        candidates.extend([base + '.py', base + '/__init__.py'])
+    return candidates
+
+
+def _script_candidates(spec, source_dir, language):
+    candidates = []
+    base = (source_dir / spec).as_posix()
+    candidates.append(base)
+    if language == 'typescript':
+        source_suffix = PurePosixPath(base).suffix.lower()
+        substitutions = {'.js': ('.ts', '.tsx', '.d.ts'), '.jsx': ('.tsx',), '.mjs': ('.mts',), '.cjs': ('.cts',)}
+        for replacement in substitutions.get(source_suffix, ()):
+            candidates.append(PurePosixPath(base).with_suffix(replacement).as_posix())
+    for ext in ('.ts', '.tsx', '.mts', '.js', '.jsx', '.mjs', '.cjs', '.vue', '.svelte', '.json', '.sql'):
+        candidates.append(base + ext)
+        candidates.append((PurePosixPath(base) / ('index' + ext)).as_posix())
+    return candidates
+
+
+def _fallback_candidates(spec, source_dir, language):
+    candidates = []
+    module = spec.replace('\\', '/').strip().rstrip('/')
+    bases = [module]
+    if '.' in module and '/' not in module and (PurePosixPath(module).suffix == ''):
+        bases.append(module.replace('.', '/'))
+    extensions = _language_extensions(language)
+    for raw_base in bases:
+        for prefix in (source_dir, PurePosixPath('.')):
+            base = (prefix / raw_base).as_posix()
+            candidates.append(base)
+            for extension in extensions:
+                candidates.extend((base + extension, (PurePosixPath(base) / ('mod' + extension)).as_posix(), (PurePosixPath(base) / ('index' + extension)).as_posix(), (PurePosixPath(base) / ('__init__' + extension)).as_posix()))
+    return candidates
+
+
+def _candidate_paths(spec: str, source_path: str, language: str, root: Path, contents: Dict[str, Tuple[str, str]], go_module: Optional[str], java_packages: Dict[str, str]) -> List[str]:
     spec = spec.strip()
     candidates: List[str] = []
     source_dir = PurePosixPath(source_path).parent
-    if language == "python":
-        relative_import = spec.startswith(".")
-        module = spec.lstrip(".") if relative_import else spec
-        parts = module.split(".") if module else []
-        base = PurePosixPath(*parts).as_posix() if parts else ""
-        if relative_import:
-            depth = len(spec) - len(spec.lstrip("."))
-            prefix = source_dir
-            for _ in range(max(0, depth - 1)):
-                prefix = prefix.parent
-            relative = (prefix / base).as_posix()
-            candidates.extend([relative + ".py", relative + "/__init__.py"])
-        else:
-            candidates.extend([base + ".py", base + "/__init__.py"])
-    elif language in ("javascript", "typescript") or (language == "ruby" and spec.startswith(".")):
-        base = (source_dir / spec).as_posix()
-        candidates.append(base)
-        if language == "typescript":
-            source_suffix = PurePosixPath(base).suffix.lower()
-            substitutions = {".js": (".ts", ".tsx", ".d.ts"), ".jsx": (".tsx",),
-                             ".mjs": (".mts",), ".cjs": (".cts",)}
-            for replacement in substitutions.get(source_suffix, ()):
-                candidates.append(PurePosixPath(base).with_suffix(replacement).as_posix())
-        for ext in (".ts", ".tsx", ".mts", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte", ".json", ".sql"):
-            candidates.append(base + ext)
-            candidates.append((PurePosixPath(base) / ("index" + ext)).as_posix())
-    elif language in ("c", "cpp"):
+    if language == 'python':
+        candidates.extend(_python_candidates(spec, source_dir))
+    elif language in ('javascript', 'typescript') or (language == 'ruby' and spec.startswith('.')):
+        candidates.extend(_script_candidates(spec, source_dir, language))
+    elif language in ('c', 'cpp'):
         base = (source_dir / spec).as_posix()
         candidates.append(base)
         candidates.extend([(source_dir / spec).as_posix()])
-    elif language == "go":
-        module_prefix = (go_module + "/") if go_module else None
+    elif language == 'go':
+        module_prefix = go_module + '/' if go_module else None
         if module_prefix and spec.startswith(module_prefix):
             package_dir = spec[len(module_prefix):]
-            candidates.extend(path for path, (lang, _text) in contents.items()
-                              if lang == "go" and PurePosixPath(path).parent.as_posix() == package_dir)
-    elif language == "java":
+            candidates.extend((path for path, (lang, _text) in contents.items() if lang == 'go' and PurePosixPath(path).parent.as_posix() == package_dir))
+    elif language == 'java':
         target = java_packages.get(spec)
         if target:
             candidates.append(target)
-        elif spec.endswith(".*"):
+        elif spec.endswith('.*'):
             package = spec[:-2]
-            candidates.extend(path for path in java_packages.values()
-                              if re.search(r"(?m)^\s*package\s+" + re.escape(package) + r"\s*;", contents[path][1]))
-    elif language == "rust":
-        # `mod foo;` refers to foo.rs or foo/mod.rs adjacent to the containing module.
-        module = spec.split("::", 1)[0]
+            candidates.extend(path for path in java_packages.values() if re.search('(?m)^\\s*package\\s+' + re.escape(package) + '\\s*;', contents[path][1]))
+    elif language == 'rust':
+        module = spec.split('::', 1)[0]
         base_dir = source_dir
-        if PurePosixPath(source_path).name == "mod.rs":
+        if PurePosixPath(source_path).name == 'mod.rs':
             base_dir = source_dir
         base = (base_dir / module).as_posix()
-        candidates.extend([base + ".rs", (PurePosixPath(base) / "mod.rs").as_posix()])
-    elif language == "php":
+        candidates.extend([base + '.rs', (PurePosixPath(base) / 'mod.rs').as_posix()])
+    elif language == 'php':
         base = (source_dir / spec).as_posix()
-        candidates.extend([base, base + ".php"])
-    elif language == "ruby" and not spec.startswith("."):
-        base = spec.replace("::", "/")
-        candidates.extend([base + ".rb", (source_dir / (base + ".rb")).as_posix()])
-    elif language in ("kotlin", "scala", "csharp"):
-        # Match known package/namespace declarations; avoids assuming arbitrary
-        # external package names are project files.
-        dotted = spec.replace(".*", "")
+        candidates.extend([base, base + '.php'])
+    elif language == 'ruby' and (not spec.startswith('.')):
+        base = spec.replace('::', '/')
+        candidates.extend([base + '.rb', (source_dir / (base + '.rb')).as_posix()])
+    elif language in ('kotlin', 'scala', 'csharp'):
+        dotted = spec.replace('.*', '')
         for path, (lang, text) in contents.items():
             if lang != language:
                 continue
-            if re.search(r"(?m)^\s*(?:package|namespace)\s+" + re.escape(dotted) + r"(?:\s|;|$)", text):
+            if re.search('(?m)^\\s*(?:package|namespace)\\s+' + re.escape(dotted) + '(?:\\s|;|$)', text):
                 candidates.append(path)
     else:
-        # Portable fallback for unregistered grammars: resolve literal paths and
-        # dotted module names against adjacent and project-root source files.
-        module = spec.replace("\\", "/").strip().rstrip("/")
-        bases = [module]
-        if "." in module and "/" not in module and PurePosixPath(module).suffix == "":
-            bases.append(module.replace(".", "/"))
-        extensions = _language_extensions(language)
-        for raw_base in bases:
-            for prefix in (source_dir, PurePosixPath(".")):
-                base = (prefix / raw_base).as_posix()
-                candidates.append(base)
-                for extension in extensions:
-                    candidates.extend((base + extension,
-                                       (PurePosixPath(base) / ("mod" + extension)).as_posix(),
-                                       (PurePosixPath(base) / ("index" + extension)).as_posix(),
-                                       (PurePosixPath(base) / ("__init__" + extension)).as_posix()))
-    # Normalize imports such as ../shared/header.h and resolve only files already
-    # inside the bounded inventory. Never use a reference to read outside root.
+        candidates.extend(_fallback_candidates(spec, source_dir, language))
+    return _resolved_candidates(candidates, contents)
+
+
+def _resolved_candidates(candidates, contents):
     seen: Set[str] = set()
     resolved: List[str] = []
     for path in candidates:
-        normalized = posixpath.normpath(path.replace("\\\\", "/"))
-        if normalized.startswith("../") or normalized == ".." or normalized.startswith("/"):
+        normalized = posixpath.normpath(path.replace('\\\\', '/'))
+        if normalized.startswith('../') or normalized == '..' or normalized.startswith('/'):
             continue
         if normalized in contents and normalized not in seen:
             seen.add(normalized)
             resolved.append(normalized)
     return resolved
-
 
 def build_dependency_graph(root: Path, max_files: int = 100000,
                            max_file_bytes: int = 5 * 1024 * 1024,

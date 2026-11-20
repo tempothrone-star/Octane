@@ -53,3 +53,9 @@ The [public Blinker replay](evaluation.md) exercises one historical maintainer p
 Build-file overrides are distinct from pure test-file exceptions. Recognized structured test settings remain fixed, while XML/Gradle formats record an opaque text review and require independent inspection of test selection. Unsupported mutation languages report unavailable with no score; partial support and timeouts are explicit. [Follow-up review](follow-up-review.md).
 
 SARIF export preserves recorded verification/stale status. Language servers receive an explicit environment allowlist and bounded failure diagnostics. MCP identity is derived from self-reported handshake metadata and is not authentication. `verify-provenance --rebuild` checks signed ledger fields; predicate v2 covers more recorded payloads than historical v1. Keyless OIDC signing through external Cosign was not exercised live; its verification adapter has controlled transport/policy checks.
+
+## 0.2.1 enforcement
+
+The complexity gate now covers all production Python, with a non-growing baseline for existing functions above 30. Average and maximum scores fall; total project complexity does not. The [polish review](polish-review.md) and changelog report measured values and remaining debt.
+
+A minimal fake LSP peer exercises host transport and semantic paths without external providers, and CI enforces 85% language-server coverage. SARIF lists IDs through a public, bounded store API. Cosign verification requires 3.0.5+ and can take an operator-authenticated local TrustedRoot JSON; complete offline bundles and independently prepared trust material are required. Live keyless signing and Podman/runsc deployment testing remain separate.

@@ -1,6 +1,6 @@
 {
   "name": "octane-openclaw",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": false,
   "description": "Octane project intelligence, function tracing, and evidence-driven repairs for OpenClaw and MCP",
   "type": "module",

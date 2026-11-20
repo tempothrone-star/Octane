@@ -15,10 +15,7 @@ def export_sarif(intelligence, project_id, evidence_ids=None, limit=1000):
         raise KeyError(project_id)
     root = Path(project['root']).resolve()
     if evidence_ids is None:
-        with intelligence._session() as db:
-            identifiers = [row['id'] for row in db.execute(
-                "SELECT id FROM evidence WHERE project_id=? AND evidence_type='structured_report' ORDER BY collected_at,id LIMIT ?",
-                (project_id, min(limit,1000)))]
+        identifiers = intelligence.list_evidence_ids(project_id, "structured_report", min(limit, 1000))
     else:
         if not isinstance(evidence_ids, list) or len(evidence_ids) > 1000 or any(not isinstance(item,str) for item in evidence_ids):
             raise ValueError('SARIF evidence IDs must be a list of at most 1000 strings')

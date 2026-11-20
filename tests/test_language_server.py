@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import sys
+import time
 from pathlib import Path
 import tempfile
 import unittest
@@ -39,6 +41,16 @@ class LanguageServerTests(unittest.TestCase):
             LanguageServer("shell-command", self.root)
         with self.assertRaisesRegex(ValueError, "python and typescript"):
             semantic_calls(self.root, [], {}, "revision", [], {"unknown": ["server"]})
+
+    def test_unresponsive_server_cannot_block_large_request_writes(self):
+        server = LanguageServer([sys.executable, "-c", "import time; time.sleep(60)"], self.root, timeout=0.1)
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(TimeoutError, "stopped reading"):
+                server.send("textDocument/didOpen", {"text": "x" * 1_000_000})
+        finally:
+            server.close()
+        self.assertLess(time.monotonic() - started, 5)
 
     @unittest.skipUnless(os.environ.get("OCTANE_LSP_TEST_TOOLS"), "set OCTANE_LSP_TEST_TOOLS to installed language server tools")
     def test_real_pyright_and_typescript_resolve_calls_through_imports(self):

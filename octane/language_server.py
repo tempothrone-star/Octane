@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 from pathlib import Path
 import queue
 import subprocess
@@ -17,9 +19,10 @@ class LanguageServer:
             raise ValueError("language server commands must be explicit non-empty argument arrays")
         self.deadline = time.monotonic() + timeout
         self.process = subprocess.Popen(command, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.DEVNULL)
+                                        stderr=subprocess.DEVNULL, start_new_session=os.name == "posix")
         self.messages = queue.Queue(maxsize=256)
         self.identifier = 0
+        self.writer = None
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -60,8 +63,22 @@ class LanguageServer:
 
     def _write(self, value):
         data = json.dumps(value, separators=(",", ":")).encode()
-        self.process.stdin.write(f"Content-Length: {len(data)}\r\n\r\n".encode() + data)
-        self.process.stdin.flush()
+        errors = []
+
+        def write():
+            try:
+                self.process.stdin.write(f"Content-Length: {len(data)}\r\n\r\n".encode() + data)
+                self.process.stdin.flush()
+            except OSError as exc:
+                errors.append(exc)
+
+        self.writer = threading.Thread(target=write, daemon=True)
+        self.writer.start()
+        self.writer.join(timeout=max(0, self.deadline - time.monotonic()))
+        if self.writer.is_alive():
+            raise TimeoutError("language server stopped reading within its analysis budget")
+        if errors:
+            raise errors[0]
 
     def request(self, method, params=None):
         self.identifier += 1
@@ -95,15 +112,21 @@ class LanguageServer:
             return value.get("result")
 
     def close(self):
-        self.process.terminate()
-        try:
-            self.process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
+        if os.name == "posix":
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        elif self.process.poll() is None:
             self.process.kill()
-            self.process.wait(timeout=3)
-        self.process.stdin.close()
+        self.process.wait(timeout=3)
+        if self.writer is not None:
+            self.writer.join(timeout=2)
+        if self.writer is None or not self.writer.is_alive():
+            self.process.stdin.close()
         self.reader.join(timeout=2)
-        self.process.stdout.close()
+        if not self.reader.is_alive():
+            self.process.stdout.close()
 
 
 def _definitions(items):

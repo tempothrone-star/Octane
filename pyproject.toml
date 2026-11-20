@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octane-pil"
-version = "0.1.0"
-description = "Internal Python and SQLite engine for the Octane OpenClaw plugin"
+version = "0.2.0"
+description = "Evidence-driven project intelligence, function tracing, and validated repair workflows for OpenClaw and MCP"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
@@ -16,7 +16,7 @@ dependencies = []
 octane = "octane.__main__:main"
 
 [project.optional-dependencies]
-dev = ["ruff==0.17.6", "coverage==7.17.3"]
+dev = ["ruff==0.17.6", "coverage==7.17.3", "radon==6.0.1"]
 provenance = ["cryptography>=46,<51"]
 testing = ["hypothesis>=6.140,<7"]
 ast = ["tree-sitter-languages==1.10.2", "tree-sitter==0.21.3"]
@@ -29,6 +29,7 @@ octane = ["*.cjs", "*.rb"]
 "octane.ledger" = ["migrations/*.sql"]
 
 [tool.ruff]
+# The checkout-only scripts/octane.py ledger path supports 3.9; packaged/native tools require 3.11+.
 target-version = "py39"
 exclude = ["build", "node_modules"]
 

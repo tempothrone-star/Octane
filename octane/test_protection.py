@@ -8,10 +8,9 @@ from pathlib import Path, PurePosixPath
 
 
 TEST_DIRECTORIES = {"test", "tests", "spec", "specs", "__tests__", "fixtures", "__fixtures__", "testdata"}
-_CONFIG_NAMES = {"conftest.py", "pytest.ini", "tox.ini", "pyproject.toml", "setup.cfg", "package.json",
-                 "composer.json", "phpunit.xml", "phpunit.xml.dist", "cargo.toml", "pom.xml", ".rspec"}
+_CONFIG_NAMES = {"conftest.py", "pytest.ini", "phpunit.xml", "phpunit.xml.dist", ".rspec"}
 _PATTERNS = ("test_*", "*_test.*", "*.test.*", "*.spec.*", "*Test.java", "*Tests.cs", "*.phpt",
-             "jest.config.*", "vitest.config.*", ".mocharc.*", "build.gradle*")
+             "jest.config.*", "vitest.config.*", ".mocharc.*")
 
 
 def is_test_path(path: str) -> bool:

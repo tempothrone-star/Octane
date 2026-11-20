@@ -9,6 +9,8 @@ from .db import _id, _now, _scrub_sensitive_text
 from .investigation import context_evidence_ids
 from .workspace import WorkspaceManager
 from .test_protection import baseline_tests, is_test_path
+from .build_config import build_change_review, is_build_path
+from .mutation_support import mutation_support
 
 _INTENT_TYPES = {"user_requirement", "documented_behavior", "design_decision", "intent_contract"}
 
@@ -185,8 +187,15 @@ def _mutation_evidence(db, project_id, evidence_ids, comparison, candidate, expe
             continue
         data = json.loads(row["payload_json"])
         if (data.get("candidate_hash") != comparison["candidate_hash"] or data.get("image_id") != candidate["image_id"]
-                or data.get("test_integrity") != expected_tests or data.get("original_bug_detected") is not True):
+                or data.get("test_integrity") != expected_tests
+                or (data.get("status") != "unavailable" and data.get("original_bug_detected") is not True)):
             raise ValueError("mutation evidence must detect the original bug on the current candidate and image")
+        support = mutation_support(comparison["differences"])
+        if data.get("status") == "unavailable":
+            if support["status"] != "unavailable" or data.get("candidate_run_id") != candidate["id"]:
+                raise ValueError("unavailable mutation evidence must match unsupported current source")
+            results.append({"evidence_id": identifier, "status": "unavailable", "score": None, "support": support})
+            continue
         mutants = data.get("mutants", [])
         if data.get("candidate_run_id") != candidate["id"] or not isinstance(mutants, list) or not mutants:
             raise ValueError("mutation summary needs individual recorded executions for this candidate")
@@ -215,7 +224,8 @@ def _mutation_evidence(db, project_id, evidence_ids, comparison, candidate, expe
         if not reversions or any(status != "killed" for status in reversions):
             raise ValueError("mutation executions must detect the tested original-source reversions")
         killed = sum(status == "killed" for _, status in checked)
-        results.append({"evidence_id": identifier, "score": killed / len(checked),
+        results.append({"evidence_id": identifier, "status": "partial" if support["status"] == "partial" else "completed",
+                        "support": support, "score": killed / len(checked),
                         "killed": killed, "survived": len(checked) - killed})
     return results
 
@@ -257,12 +267,16 @@ def propose_patch(manager: WorkspaceManager, project_id: str, investigation_id: 
                   baseline_run_id: str, candidate_run_id: str, regression_run_ids: list[str],
                   rationale: str, supporting_evidence_ids: list[str], agent_id: str,
                   *, strict_preservation_output: bool = False, allow_test_changes: bool = False,
-                  test_changes_rationale: str = ""):
+                  test_changes_rationale: str = "", allow_build_changes: bool = False, build_changes_rationale: str = ""):
     ids = _proposal_arguments(strict_preservation_output, allow_test_changes, rationale,
                               regression_run_ids, supporting_evidence_ids, baseline_run_id, candidate_run_id)
     intelligence = manager.intelligence
     workspace, comparison, changed_tests, expected_tests = _candidate_comparison(
         manager, project_id, workspace_id, allow_test_changes, test_changes_rationale)
+    changed_builds = [change["path"] for change in comparison["differences"]
+                      if is_build_path(change["path"]) and not is_test_path(change["path"])]
+    build_review = build_change_review(Path(workspace["baseline_path"]), Path(workspace["path"]), changed_builds,
+                                      allowed=allow_build_changes, rationale=build_changes_rationale)
     with intelligence._transaction() as db:
         for permission in ("write_evidence", "read_investigation", "checkpoint_investigation"):
             intelligence._require_permission(db, project_id, agent_id, permission)
@@ -274,6 +288,9 @@ def propose_patch(manager: WorkspaceManager, project_id: str, investigation_id: 
         runs = _proposal_runs(db, project_id, investigation_id, investigation, workspace_id,
                               workspace, comparison, expected_tests, ids)
         baseline, candidate, *regressions = runs
+        if changed_builds and any(json.loads(run["result_json"]).get("build_changes", {}).get("files") != build_review["files"]
+                                  for run in [candidate, *regressions]):
+            raise ValueError("rerun candidate checks with the explicit build override and current key diff")
         preservation_pairs = _preservation_pairs(db, project_id, investigation_id, investigation,
                                                  workspace, regressions, expected_tests, strict_preservation_output)
         intent_ids = _intent_evidence(db, project_id, investigation, supporting_evidence_ids)
@@ -284,7 +301,8 @@ def propose_patch(manager: WorkspaceManager, project_id: str, investigation_id: 
                    "baseline_run_id": baseline_run_id, "candidate_run_id": candidate_run_id,
                    "regression_run_ids": regression_run_ids, "supporting_evidence_ids": supporting_evidence_ids,
                    "intent_evidence_ids": intent_ids, "preservation_pairs": preservation_pairs,
-                   "mutation_results": mutations,
+                   "mutation_results": mutations, "build_changes": build_review,
+                   "mutation_support": mutation_support(comparison["differences"]),
                    "changed_paths": scope, "review_notes": comparison["review_notes"],
                    "test_changes": {"allowed": allow_test_changes, "paths": changed_tests,
                                     "justification": _scrub_sensitive_text(test_changes_rationale) if changed_tests else "",

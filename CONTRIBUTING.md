@@ -8,7 +8,7 @@ Use Python 3.11+ for package development and the full test suite. Node.js versio
 python3 -m venv .venv
 .venv/bin/python -m pip install '.[dev]'
 npm ci --omit=peer
-.venv/bin/ruff check octane tests
+.venv/bin/ruff check octane tests scripts/check_complexity.py
 .venv/bin/python -m unittest discover -s tests -q
 npm test
 ```
@@ -24,8 +24,10 @@ Coverage uses subprocess instrumentation:
 ```sh
 COVERAGE_FILE="$PWD/.coverage" COVERAGE_RCFILE="$PWD/.coveragerc" .venv/bin/coverage run -m unittest discover -s tests -q
 .venv/bin/coverage combine
-.venv/bin/coverage report --fail-under=69
-.venv/bin/coverage report --include='octane/experiments.py' --fail-under=85
+.venv/bin/coverage report --fail-under=75
+.venv/bin/coverage report --include='octane/experiments.py' --fail-under=100
 ```
 
 Use a GitHub no-reply email for new commits when you want to keep a personal address out of public history.
+
+CI separately gates original-test protection/storage at 100%, provenance/host transport at 90%, and Docker workspace/mutation at 78%/95%. Run `.venv/bin/python scripts/check_complexity.py` to check the five reviewed orchestration functions. Use separate coverage data-file prefixes when running independent coverage jobs concurrently. See [CHANGELOG.md](CHANGELOG.md) for the 0.2.0 release scope.

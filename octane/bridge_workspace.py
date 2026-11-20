@@ -71,11 +71,15 @@ class WorkspaceOperations:
         if mode == "observation":
             return manager.run_observation(p["workspaceId"], command, image, timeout,
                                            investigation_id=investigation_id, python_trace=python_trace,
-                                           native_trace_symbols=native_symbols, runtime_trace=runtime_trace, report_format=report_format)
+                                           native_trace_symbols=native_symbols, runtime_trace=runtime_trace, report_format=report_format,
+                                           allow_build_changes=p.get("allowBuildChanges", False),
+                                           build_changes_rationale=p.get("buildChangesRationale", ""))
         if mode == "experimentation":
             return manager.run_experiment(p["workspaceId"], command, image, timeout,
                                           investigation_id=investigation_id, python_trace=python_trace,
-                                          native_trace_symbols=native_symbols, runtime_trace=runtime_trace, report_format=report_format)
+                                          native_trace_symbols=native_symbols, runtime_trace=runtime_trace, report_format=report_format,
+                                           allow_build_changes=p.get("allowBuildChanges", False),
+                                           build_changes_rationale=p.get("buildChangesRationale", ""))
         raise BridgeError("mode must be observation or experimentation")
 
     def _op_workspace_propose(self, p: dict[str, Any]) -> dict[str, Any]:
@@ -86,7 +90,9 @@ class WorkspaceOperations:
                              _required(p, "evidenceIds", list), self._actor(project_id, "workflow"),
                              strict_preservation_output=p.get("strictPreservationOutput", False),
                              allow_test_changes=p.get("allowTestChanges", False),
-                             test_changes_rationale=p.get("testChangesRationale", ""))
+                             test_changes_rationale=p.get("testChangesRationale", ""),
+                             allow_build_changes=p.get("allowBuildChanges", False),
+                             build_changes_rationale=p.get("buildChangesRationale", ""))
 
     def _op_workspace_mutate(self, p: dict[str, Any]) -> dict[str, Any]:
         manager, project_id = self._workspace(_required(p, "workspaceId", str))

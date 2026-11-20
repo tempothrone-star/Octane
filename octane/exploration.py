@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .db import ProjectIntelligence
+from .host_environment import git_arguments, git_environment
 
 
 @dataclass
@@ -57,52 +58,45 @@ class PythonAdapter:
         calls: list[tuple[str, str, int]] = []
         edge_count = 0
         for path in files:
-            rel = path.relative_to(root).as_posix()
-            file_id = intelligence.add_node(project_id, f"file:{rel}", "file", path.name, rel, language="python", revision=revision)
+            file_id, found, imported, called, count = self._index_file(
+                intelligence, project_id, root, path, content[path], hashes, revision, scanner, changed)
             module_nodes[path] = file_id
-            try:
-                tree = ast.parse(content[path], filename=rel)
-            except (SyntaxError, UnicodeDecodeError) as exc:
-                if rel in changed:
-                    intelligence.submit_evidence(project_id, "parse_error", {"error": str(exc)}, "Python source could not be parsed", agent_id=scanner["id"], revision=revision, source_path=rel, verification_status="observed")
-                continue
-            parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
-            for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    parent = _qualified_name(tree, node)
-                    kind = "class" if isinstance(node, ast.ClassDef) else "function"
-                    key = f"symbol:{rel}:{parent}"
-                    symbol_id = intelligence.add_node(project_id, key, kind, parent, rel, node.lineno, "python", revision,
-                                                     {"async": isinstance(node, ast.AsyncFunctionDef), "end_line": getattr(node, "end_lineno", None)})
-                    intelligence.add_relationship(project_id, file_id, symbol_id, "defines", revision,
-                                                  confidence=1.0, agent_id=scanner["id"])
-                    edge_count += 1
-                    function_nodes.append((parent, rel, symbol_id, node.lineno, kind))
-                    if kind == "function":
-                        for sub in ast.walk(node):
-                            if not isinstance(sub, ast.Call):
-                                continue
-                            ancestor = parents.get(sub)
-                            while ancestor is not None and not isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                                ancestor = parents.get(ancestor)
-                            if ancestor is node:
-                                name = _call_name(sub.func)
-                                if name:
-                                    calls.append((f"{rel}:{parent}", name, sub.lineno))
-                elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                    if isinstance(node, ast.Import):
-                        imports.extend((path, alias.name, node.lineno, 0) for alias in node.names)
-                    else:
-                        if node.module:
-                            names = [node.module] + [node.module + "." + alias.name
-                                                     for alias in node.names if alias.name != "*"]
-                        else:
-                            names = [alias.name for alias in node.names if alias.name != "*"]
-                        imports.extend((path, name, node.lineno, node.level) for name in names if name)
-            if rel in changed:
-                intelligence.submit_evidence(project_id, "file_scan", {"path": rel, "sha256": hashes[rel], "symbols": sum(1 for f in function_nodes if f[1] == rel)},
-                                             "Python file hashed and inspected using AST", agent_id=scanner["id"], revision=revision, source_path=rel, verification_status="observed")
+            function_nodes.extend(found)
+            imports.extend(imported)
+            calls.extend(called)
+            edge_count += count
 
+        edge_count += self._link_files(intelligence, project_id, root, files, module_nodes, function_nodes,
+                                       imports, calls, revision, scanner)
+        with intelligence._transaction() as db:
+            for rel, digest in hashes.items():
+                db.execute("INSERT INTO files(project_id,path,sha256,revision,stale,updated_at,mtime_ns) VALUES(?,?,?,?,0,datetime('now'),?) ON CONFLICT(project_id,path) DO UPDATE SET sha256=excluded.sha256,revision=excluded.revision,stale=0,updated_at=excluded.updated_at,mtime_ns=excluded.mtime_ns",
+                           (project_id, rel, digest, revision, mtimes[rel]))
+            for rel in removed:
+                db.execute("UPDATE files SET stale=1 WHERE project_id=? AND path=?", (project_id, rel))
+                db.execute("UPDATE graph_nodes SET stale=1 WHERE project_id=? AND path=?", (project_id, rel))
+            known_languages = set(project["languages"])
+            if files:
+                known_languages.add("python")
+            db.execute("UPDATE projects SET revision=?,languages_json=?,last_indexed_at=?,updated_at=datetime('now') WHERE id=?",
+                       (revision, json.dumps(sorted(known_languages)), _utc_now(), project_id))
+            change_details = {"changed": changed, "removed": removed,
+                              "files": {relative: {"before_sha256": previous.get(relative),
+                                                   "after_sha256": hashes.get(relative),
+                                                   "mtime_ns": mtimes.get(relative)}
+                                        for relative in sorted(changed_set)}}
+            db.execute("INSERT OR IGNORE INTO project_revisions VALUES(?,?,?,?,?)",
+                       (f"REV-{hashlib.sha256((project_id+revision).encode()).hexdigest()[:24]}", project_id, revision,
+                        _utc_now(), json.dumps(change_details, sort_keys=True)))
+            intelligence._audit(db, project_id, scanner["id"], "project.index", "project", project_id,
+                                {"revision": revision, "files_scanned": len(files), "changed": changed, "removed": removed})
+        return {"project_id": project_id, "revision": revision, "files_scanned": len(files), "symbols_discovered": len(function_nodes),
+                "relationships_discovered": edge_count, "changed_files": changed, "removed_files": removed,
+                "unsupported": sorted(set(p.suffix for p in root.rglob("*") if p.is_file() and not self._excluded(p, root) and not p.is_symlink() and p.suffix and p.suffix != ".py"))}
+
+    @staticmethod
+    def _link_files(intelligence, project_id, root, files, module_nodes, function_nodes, imports, calls, revision, scanner):
+        edge_count = 0
         by_module: dict[str, Path] = {}
         for path in files:
             rel = path.relative_to(root)
@@ -136,31 +130,72 @@ class PythonAdapter:
                                               agent_id=scanner["id"])
                 edge_count += 1
 
-        with intelligence._transaction() as db:
-            for rel, digest in hashes.items():
-                db.execute("INSERT INTO files(project_id,path,sha256,revision,stale,updated_at,mtime_ns) VALUES(?,?,?,?,0,datetime('now'),?) ON CONFLICT(project_id,path) DO UPDATE SET sha256=excluded.sha256,revision=excluded.revision,stale=0,updated_at=excluded.updated_at,mtime_ns=excluded.mtime_ns",
-                           (project_id, rel, digest, revision, mtimes[rel]))
-            for rel in removed:
-                db.execute("UPDATE files SET stale=1 WHERE project_id=? AND path=?", (project_id, rel))
-                db.execute("UPDATE graph_nodes SET stale=1 WHERE project_id=? AND path=?", (project_id, rel))
-            known_languages = set(project["languages"])
-            if files:
-                known_languages.add("python")
-            db.execute("UPDATE projects SET revision=?,languages_json=?,last_indexed_at=?,updated_at=datetime('now') WHERE id=?",
-                       (revision, json.dumps(sorted(known_languages)), _utc_now(), project_id))
-            change_details = {"changed": changed, "removed": removed,
-                              "files": {relative: {"before_sha256": previous.get(relative),
-                                                   "after_sha256": hashes.get(relative),
-                                                   "mtime_ns": mtimes.get(relative)}
-                                        for relative in sorted(changed_set)}}
-            db.execute("INSERT OR IGNORE INTO project_revisions VALUES(?,?,?,?,?)",
-                       (f"REV-{hashlib.sha256((project_id+revision).encode()).hexdigest()[:24]}", project_id, revision,
-                        _utc_now(), json.dumps(change_details, sort_keys=True)))
-            intelligence._audit(db, project_id, scanner["id"], "project.index", "project", project_id,
-                                {"revision": revision, "files_scanned": len(files), "changed": changed, "removed": removed})
-        return {"project_id": project_id, "revision": revision, "files_scanned": len(files), "symbols_discovered": len(function_nodes),
-                "relationships_discovered": edge_count, "changed_files": changed, "removed_files": removed,
-                "unsupported": sorted(set(p.suffix for p in root.rglob("*") if p.is_file() and not self._excluded(p, root) and not p.is_symlink() and p.suffix and p.suffix != ".py"))}
+        return edge_count
+
+    def _index_file(self, intelligence, project_id, root, path, data, hashes, revision, scanner, changed):
+        rel = path.relative_to(root).as_posix()
+        file_id = intelligence.add_node(project_id, f"file:{rel}", "file", path.name, rel,
+                                        language="python", revision=revision)
+        try:
+            tree = ast.parse(data, filename=rel)
+        except (SyntaxError, UnicodeDecodeError) as exc:
+            if rel in changed:
+                intelligence.submit_evidence(project_id, "parse_error", {"error": str(exc)},
+                    "Python source could not be parsed", agent_id=scanner["id"], revision=revision,
+                    source_path=rel, verification_status="observed")
+            return file_id, [], [], [], 0
+        functions, calls = self._index_symbols(intelligence, project_id, tree, rel, file_id, revision, scanner)
+        if rel in changed:
+            intelligence.submit_evidence(project_id, "file_scan", {"path": rel, "sha256": hashes[rel],
+                "symbols": len(functions)}, "Python file hashed and inspected using AST", agent_id=scanner["id"],
+                revision=revision, source_path=rel, verification_status="observed")
+        return file_id, functions, self._imports(tree, path), calls, len(functions)
+
+    @staticmethod
+    def _index_symbols(intelligence, project_id, tree, rel, file_id, revision, scanner):
+        functions, calls = [], []
+        parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            qualified = _qualified_name(tree, node)
+            kind = "class" if isinstance(node, ast.ClassDef) else "function"
+            symbol_id = intelligence.add_node(project_id, f"symbol:{rel}:{qualified}", kind, qualified,
+                rel, node.lineno, "python", revision, {"async": isinstance(node, ast.AsyncFunctionDef),
+                                                     "end_line": getattr(node, "end_lineno", None)})
+            intelligence.add_relationship(project_id, file_id, symbol_id, "defines", revision,
+                                           confidence=1.0, agent_id=scanner["id"])
+            functions.append((qualified, rel, symbol_id, node.lineno, kind))
+            if kind == "function":
+                calls.extend(PythonAdapter._direct_calls(node, parents, rel, qualified))
+        return functions, calls
+
+    @staticmethod
+    def _direct_calls(node, parents, rel, qualified):
+        for sub in ast.walk(node):
+            if not isinstance(sub, ast.Call):
+                continue
+            ancestor = parents.get(sub)
+            while ancestor is not None and not isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                ancestor = parents.get(ancestor)
+            if ancestor is node:
+                name = _call_name(sub.func)
+                if name:
+                    yield f"{rel}:{qualified}", name, sub.lineno
+
+    @staticmethod
+    def _imports(tree, path):
+        imports = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports.extend((path, alias.name, node.lineno, 0) for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                if node.module:
+                    names = [node.module] + [node.module + "." + alias.name for alias in node.names if alias.name != "*"]
+                else:
+                    names = [alias.name for alias in node.names if alias.name != "*"]
+                imports.extend((path, name, node.lineno, node.level) for name in names if name)
+        return imports
 
     @staticmethod
     def _excluded(path: Path, root: Path) -> bool:
@@ -318,10 +353,10 @@ class Tentacle:
 
 def _revision(root: Path, hashes: dict[str, str]) -> str:
     try:
-        result = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=2, check=True)
+        result = subprocess.run(git_arguments(root, "rev-parse", "HEAD"), capture_output=True, text=True, timeout=2, check=True, env=git_environment())
         head = result.stdout.strip()
-        status = subprocess.run(["git", "-C", str(root), "-c", "core.fsmonitor=false", "status", "--porcelain"],
-                                capture_output=True, text=True, timeout=2, check=True).stdout
+        status = subprocess.run(git_arguments(root, "status", "--porcelain"),
+                                capture_output=True, text=True, timeout=2, check=True, env=git_environment()).stdout
         tree = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()[:12]
         working = hashlib.sha256(status.encode()).hexdigest()[:12] if status else "clean"
         return f"{head}+{working}+{tree}"

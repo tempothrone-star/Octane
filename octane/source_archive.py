@@ -2,17 +2,27 @@
 from __future__ import annotations
 
 import io
-import os
+from functools import lru_cache
 from pathlib import Path, PurePosixPath
 import re
 import tarfile
 
 from .process import run_bounded
+from .host_environment import git_arguments, git_environment
 from .workspace import excluded_name
 
 
+@lru_cache(maxsize=1)
+def _require_git_version():
+    result = run_bounded(['git', '--version'], env=git_environment(), limit=1024)
+    match = re.search(rb'git version (\d+)\.(\d+)', result.stdout)
+    if result.returncode or not match or tuple(map(int, match.groups())) < (2, 32):
+        raise RuntimeError('native Git integrations require Git 2.32+ for isolated config handling')
+
+
 def git(repository, *arguments):
-    result = run_bounded(["git", "-C", str(repository), *arguments], limit=100_000_000, env={**os.environ, "LC_ALL": "C"})
+    _require_git_version()
+    result = run_bounded(git_arguments(repository, *arguments), limit=100_000_000, env=git_environment())
     if result.returncode:
         if arguments[:1] == ("bisect",) and result.returncode == 2 and b"could be any of" in result.stdout:
             return result.stdout

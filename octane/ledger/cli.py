@@ -283,6 +283,27 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         if not result["matches"]:
             raise OctaneError("materialized tables do not match event-log replay: " + ", ".join(result.get("mismatches", [])), 1, "rebuild_mismatch")
         return _response(result)
+    if args.command in {"languages", "locate", "graph"}:
+        return _analysis_command(args, root)
+    if args.command == "agent":
+        return _agent_command(args, project, agent_id, actor)
+    if args.command == "evidence":
+        return _evidence_command(args, project, agent_id, actor)
+    if args.command == "claim":
+        return _claim_command(args, project, agent_id, actor)
+    if args.command == "brief":
+        connection = project.ledger.connect()
+        try:
+            project.ledger._require(connection, actor, "brief")
+        finally:
+            connection.close()
+        data = project.brief(args.task, [x for x in args.files.split(",") if x],
+                             [x for x in args.symbols.split(",") if x], args.budget_tokens)
+        return _response(data, next_steps=["Record new observations as evidence before adding claims"])
+    raise OctaneError("unsupported command", 2, "invalid_input")
+
+
+def _analysis_command(args, root):
     if args.command == "languages":
         try:
             return _response(source_inventory(root, args.max_files, args.max_file_bytes))
@@ -321,6 +342,9 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         except ValueError as error:
             raise OctaneError(str(error), 2, "invalid_input") from error
         return _response(result)
+
+
+def _agent_command(args, project, agent_id, actor):
     if args.command == "agent":
         if args.agent_command == "register":
             return _response(project.register_agent(args.name, args.role, args.trust_tier, agent_id))
@@ -336,6 +360,9 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         finally:
             connection.close()
         return _response(result)
+
+
+def _evidence_command(args, project, agent_id, actor):
     if args.command == "evidence":
         if args.evidence_command == "add":
             return _response(project.add_evidence(agent_id, args.type, args.description, _load_payload(args.payload),
@@ -361,6 +388,9 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
             return _response(project.search_evidence(args.query, args.type, args.limit))
         result = project.link_evidence(agent_id, args.evidence_id, args.related_id, args.relation, args.idempotency_key)
         return _response(result)
+
+
+def _claim_command(args, project, agent_id, actor):
     if args.command == "claim":
         if args.claim_command == "add":
             return _response(project.add_claim(agent_id, args.kind, args.text, args.evidence,
@@ -386,16 +416,6 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 connection.close()
             return _response(project.search_claims(args.query, args.status, args.limit))
         return _response(project.link_claim(agent_id, args.claim_id, args.related_id, args.relation, args.idempotency_key))
-    if args.command == "brief":
-        connection = project.ledger.connect()
-        try:
-            project.ledger._require(connection, actor, "brief")
-        finally:
-            connection.close()
-        data = project.brief(args.task, [x for x in args.files.split(",") if x],
-                             [x for x in args.symbols.split(",") if x], args.budget_tokens)
-        return _response(data, next_steps=["Record new observations as evidence before adding claims"])
-    raise OctaneError("unsupported command", 2, "invalid_input")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

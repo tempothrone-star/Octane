@@ -4,6 +4,8 @@ Octane helps an OpenClaw agent understand a project, trace behavior through func
 
 Ask **“Fix a bug.”** The workflow finds a baseline check, looks for evidence of intended behavior, reproduces the defect, and follows the affected path before editing. It then reruns the reproduction and checks that neighboring behavior still works. The OpenClaw agent supplies reasoning through its configured model provider.
 
+Release 0.2.0 adds explicit build-change review, JS/TS mutation support, isolated host integration environments, distinct MCP client attribution, ledger-backed signature verification, and SARIF export. See the [changelog](CHANGELOG.md) and [follow-up review](docs/follow-up-review.md).
+
 ## Install
 
 Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on the Gateway host. Docker is used for isolated execution; rootless Podman and configured gVisor adapters are also available.
@@ -14,6 +16,7 @@ Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on 
 | OpenClaw | Declared minimum 2026.5.17; runtime checked on 2026.11.3 |
 | Node.js | `^24.22.1` or `>=26.12.1`; checked on 26.13.0 |
 | Python package, native tools, MCP bridge | 3.11+ |
+| Native Git archive/apply/bisect | Git 2.32+; configuration and process environment isolated |
 | Checkout-only `scripts/octane.py` ledger/static CLI | 3.9+, standard library; Python 3.9 cannot pip-install this package |
 | Execution | Local approved Docker images; rootless Podman/runsc adapters require deployment validation |
 | Host platforms | Linux tested; POSIX state modes applied; Windows profile permissions and explicit container-user opt-in |
@@ -92,7 +95,7 @@ Replace `EV-0001` with the returned evidence ID. Use `languages` for source inve
 
 The same twelve tools are available through `octane-mcp` over stdio. Optional integrations add semantic Python/TypeScript edges, structured test and line-coverage reports, SARIF, mutation experiments, Hypothesis/fast-check probes, Git bisect, GitHub issue/CI evidence, Sentry/OTEL imports, offline signed in-toto provenance, and local SWE-bench-style replay. Setup, exact actions, dependencies, and verification limits are in the [integration guide](docs/integrations.md).
 
-Candidate runs execute original baseline checks through read-only overlays. Proposals reject test edits unless an explicit flag and rationale are recorded. A matched reproduction, preservation checks, current intent evidence, image identity, and source hashes remain required. Mutation evidence can test whether selected source reversions recreate the failure.
+Candidate runs execute original baseline checks through read-only overlays. Proposals reject test edits unless an explicit flag and rationale are recorded. Build configuration edits use separate `allowBuildChanges` and `buildChangesRationale` fields and retain changed-key evidence. A matched reproduction, preservation checks, current intent evidence, image identity, and source hashes remain required. Mutation evidence can test whether selected source reversions recreate the failure.
 
 ```mermaid
 flowchart LR

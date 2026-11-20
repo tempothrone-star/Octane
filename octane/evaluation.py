@@ -6,8 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 
-from .process import run_bounded
-from .source_archive import export_revision, resolve_revision
+from .source_archive import export_revision, resolve_revision, git
 from .analysis import analyzer
 
 
@@ -20,9 +19,10 @@ def apply_patch(root: Path, patch_text: str):
         patch = Path(directory) / "candidate.diff"
         patch.write_text(patch_text)
         for options in (["--check"], []):
-            result = run_bounded(["git", "apply", *options, str(patch)], cwd=root)
-            if result.returncode:
-                raise ValueError("evaluation patch does not apply to the selected source")
+            try:
+                git(root, "apply", *options, str(patch))
+            except ValueError as exc:
+                raise ValueError("evaluation patch does not apply to the selected source") from exc
     if any(path.is_symlink() for path in root.rglob("*")):
         raise ValueError("evaluation patch created a symlink")
 

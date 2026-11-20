@@ -10,6 +10,8 @@ import sqlite3
 import subprocess
 import sys
 import uuid
+from ..host_environment import git_arguments, git_environment
+
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
@@ -150,8 +152,8 @@ def resolve_project_root(start: Optional[Path] = None, explicit: Optional[str] =
     if not candidate.is_dir():
         raise OctaneError("project root is not an existing directory", 2, "invalid_input")
     try:
-        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(candidate),
-                                capture_output=True, text=True, timeout=2, check=False)
+        result = subprocess.run(git_arguments(candidate, "rev-parse", "--show-toplevel"), cwd=str(candidate),
+                                capture_output=True, text=True, timeout=2, check=False, env=git_environment())
         if result.returncode == 0 and result.stdout.strip():
             git_root = Path(result.stdout.strip()).resolve()
             if not explicit or _within(candidate, git_root):

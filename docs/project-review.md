@@ -1,5 +1,7 @@
 # Project review
 
+This document records the PR #6 snapshot. For version 0.2.0 changes, updated coverage gates, and remaining integration limits, see the [follow-up review](follow-up-review.md).
+
 Octane combines local evidence, source analysis, saved investigations, and Docker validation in one plugin. The root skill is the single workflow entry point. Source analysis is shared by the CLI and OpenClaw tools.
 
 ## November 20, 2026 upgrade
@@ -14,7 +16,7 @@ Podman/runsc were not installed on this host; their policy and argument tests us
 
 ### SQL and exception audit
 
-The no-Docker coverage run passed 172 tests with ten integration/dependency skips, reaching 78% overall coverage and 100% for `experiments.py`. CI enforces floors of 69% overall and 85% for the proposal gate.
+The no-Docker coverage run passed 172 tests with ten integration/dependency skips, reaching 78% overall coverage and 100% for `experiments.py`. At that snapshot, CI enforced floors of 69% overall and 85% for the proposal gate.
 
 Native SQL values use bound placeholders. The interpolated identifiers in `db_graph.py` come from fixed path/language fields, fixed source/target choices, or fixed predicates; search values remain bound. `db.py` invalidation statements use fixed identifiers and bound paths; transaction savepoints use generated UUID names. Portable ledger queries concatenate fixed predicates or generated placeholder counts with separately bound values. No reviewed statement inserts a caller-supplied SQL identifier.
 

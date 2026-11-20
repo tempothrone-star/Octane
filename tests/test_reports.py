@@ -76,6 +76,16 @@ class ReportTests(unittest.TestCase):
         ]
         self.assertTrue(all(report["mutation"]["score"] == 0.5 for report in reports))
 
+    def test_uncovered_and_timed_out_imported_mutants_cannot_inflate_a_score(self):
+        values = {"files": {"app.js": {"mutants": [{"status":"Killed"}, {"status":"NoCoverage"}]}}}
+        result = self.parse("stryker", values)["mutation"]
+        self.assertEqual(result["score"], 0.5)
+        self.assertEqual(result["survived"], 1)
+        values["files"]["app.js"]["mutants"].append({"status":"Timeout"})
+        result = self.parse("stryker", values)["mutation"]
+        self.assertIsNone(result["score"])
+        self.assertEqual(result["status"], "inconclusive")
+
     def test_entity_expansion_large_reports_and_outside_paths_are_rejected(self):
         for format_name, raw in (("junit", b'<!DOCTYPE x [<!ENTITY e "x">]><x/>'), ("junit", b"a" * 4_000_001)):
             with self.subTest(format=format_name):

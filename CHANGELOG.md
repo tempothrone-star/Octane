@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0
+## 1.0.0 — 2026-11-20
 
 - Compare bounded ordered Python numeric traces and import ordered traces/per-test spectra from other runtimes. Record first observed divergence and Ochiai line ranking with explicit flaky/unstable exclusions.
 - Attribute and fuse SARIF findings by failing/changed-path proximity. Add reviewed Tree-sitter query hypotheses with Python AST fallback, source hashing and bounded content caching.

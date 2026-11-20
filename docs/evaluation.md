@@ -65,7 +65,7 @@ The Git repository must retain the base commit. The adapter archives its bytes w
 
 The focused baseline exited 1; the candidate and both preservation runs exited 0. The four run/evidence IDs identify this local validation session; the temporary source workspaces and test database were removed after validation. Image tags can change, so compare the recorded immutable image ID when reproducing. Source localization ranked the independently labeled file first on this case. These one-case metrics validate the adapter and cannot estimate general localization or repair accuracy. The synthetic suite deliberately permits an unlocalized but successfully repaired case, keeping execution success separate from localization scores.
 
-## 0.3.0 replay
+## 1.0.0 validation baseline
 
 The same public maintainer patch was replayed again with the new evaluation schema on November 20, 2026. The focused baseline failed, the supplied correction passed, both preservation runs passed, and the expected file ranked first (top-1/top-5 1/1, zero execution errors). The first produced hypothesis took 1.657 seconds including snapshot/setup and the preceding checks, on the immutable Python image above. This remains supplied-patch replay, not autonomous fix discovery. Schema v2 includes top-5 and counts labeled execution errors as misses rather than dropping them from the denominator.
 

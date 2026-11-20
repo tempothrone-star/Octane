@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from .python_syntax import parse_python
 import copy
 import json
 from pathlib import Path
@@ -15,7 +16,7 @@ from .workspace import WorkspaceManager
 
 def _python_mutants(text, lines, on_error=None):
     try:
-        tree = ast.parse(text)
+        tree = parse_python(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         if on_error is not None:
             on_error(exc)

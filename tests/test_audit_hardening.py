@@ -219,3 +219,51 @@ class IntegrityAndProcessTests(unittest.TestCase):
             with patch('octane.process.os.killpg', side_effect=ProcessLookupError):
                 result = run_bounded([sys.executable, '-c', 'print("finished")'])
             self.assertEqual(result.stdout, b'finished\n')
+
+
+class PlatformRegressionTests(unittest.TestCase):
+    def test_ast_budget_applies_even_when_the_interpreter_accepts_a_deep_tree(self):
+        import ast
+        from octane.python_syntax import parse_python
+        tree = ast.Constant(value=1)
+        for _ in range(200):
+            tree = ast.BinOp(left=tree, op=ast.Add(), right=ast.Constant(value=1))
+        with patch('octane.python_syntax.ast.parse', return_value=tree):
+            with self.assertRaisesRegex(ValueError, 'depth/node'):
+                parse_python('generated')
+        broad = ast.Module(body=[ast.Pass()] * 250001, type_ignores=[])
+        with patch('octane.python_syntax.ast.parse', return_value=broad):
+            with self.assertRaisesRegex(ValueError, 'depth/node'):
+                parse_python('generated')
+
+    def test_resolved_alias_roots_work_for_property_commands_and_lsp_locations(self):
+        from octane.property_checks import property_command
+        from octane.language_server import _node
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory); root = base / 'real'; root.mkdir()
+            (root / 'app.py').write_text('def entry(x): return x\n')
+            alias = base / 'alias'; alias.symlink_to(root, target_is_directory=True)
+            self.assertEqual(property_command(alias, {'module': 'app', 'function': 'entry', 'rule': 'idempotent'})[0], 'python')
+            location = {'uri': (alias / 'app.py').as_uri(), 'name': 'entry',
+                        'range': {'start': {'line': 0, 'character': 0}}}
+            self.assertEqual(_node(location, 'python', alias, 'r', [])['path'], 'app.py')
+
+    def test_kqueue_observes_exit_without_reaping_and_reports_timeout(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock
+        from octane.process import _wait_kqueue, stop_process_group
+        events = MagicMock(); events.__enter__.return_value = events; events.control.return_value = [object()]
+        backend = SimpleNamespace(kqueue=lambda: events, kevent=lambda *a, **k: object(), KQ_FILTER_PROC=1,
+                                  KQ_EV_ADD=2, KQ_EV_ONESHOT=4, KQ_NOTE_EXIT=8)
+        child = SimpleNamespace(pid=123, args=['probe'])
+        with patch('octane.process.select', backend):
+            self.assertIsNone(_wait_kqueue(child, 1))
+            events.control.return_value = []
+            with self.assertRaises(subprocess.TimeoutExpired):
+                _wait_kqueue(child, 1)
+            events.control.side_effect = ProcessLookupError
+            self.assertIsNone(_wait_kqueue(child, 1))
+        child = MagicMock(returncode=None)
+        with patch('octane.process.os.killpg', side_effect=PermissionError), patch('octane.process.sys.platform', 'darwin'):
+            stop_process_group(child)
+            child.kill.assert_called_once()

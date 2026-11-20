@@ -72,7 +72,7 @@ class IntegrationTests(unittest.TestCase):
 
     def test_host_executable_output_and_timeout_are_bounded(self):
         result = run_bounded([sys.executable, "-c", "print('hello')"])
-        self.assertEqual(result.stdout, b"hello\n")
+        self.assertEqual(result.stdout, ("hello" + os.linesep).encode())
         with self.assertRaisesRegex(ValueError, "output budget"):
             run_bounded([sys.executable, "-c", "print('x'*100)"], limit=10)
         with self.assertRaises(subprocess.TimeoutExpired):

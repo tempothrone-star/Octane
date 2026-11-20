@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import json
 import os
-import signal
 from pathlib import Path
 import queue
 import subprocess
 import threading
 import time
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
+from urllib.request import url2pathname
 
 from .host_environment import language_server_environment
+from .process import stop_process_group
 from .db_support import _scrub_sensitive_text
 
 
@@ -137,13 +138,7 @@ class LanguageServer:
             return value.get("result")
 
     def close(self):
-        if os.name == "posix" and self.process.returncode is None:
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        elif self.process.poll() is None:
-            self.process.kill()
+        stop_process_group(self.process)
         self.process.wait(timeout=3)
         if self.writer is not None:
             self.writer.join(timeout=2)
@@ -171,9 +166,10 @@ def _definitions(items):
 
 def _node(item, language, root, revision, known):
     parsed = urlsplit(item["uri"])
-    if parsed.scheme != "file":
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
         return None
-    path = Path(unquote(parsed.path)).resolve()
+    root = root.resolve()
+    path = Path(url2pathname(parsed.path)).resolve()
     try:
         relative = path.relative_to(root).as_posix()
     except ValueError:
@@ -198,6 +194,7 @@ def _trusted_server(definition):
 
 
 def semantic_calls(root, files, contents, revision, known, servers, limit=50):
+    root = root.resolve()
     nodes, edges, coverage = {}, {}, {}
     for language, definition in (servers or {}).items():
         if language not in {"python", "typescript"}:

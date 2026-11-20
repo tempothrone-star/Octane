@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from .python_syntax import parse_python
 import hashlib
 from functools import lru_cache
 
@@ -21,7 +22,7 @@ QUERIES = {
 def _python_fallback(text):
     result = []
     try:
-        tree = ast.parse(text)
+        tree = parse_python(text)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return [], 'syntax_error'
     for node in ast.walk(tree):

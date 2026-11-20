@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+from .python_syntax import parse_python
 import symtable
 from collections import defaultdict
 from pathlib import PurePosixPath
@@ -72,7 +73,7 @@ def analyze_python(sources, revision):
     definitions = defaultdict(dict)
     for path, content in sources.items():
         try:
-            tree = ast.parse(content, filename=path)
+            tree = parse_python(content, filename=path)
             table = symtable.symtable(content, path, "exec")
         except (SyntaxError, UnicodeError, ValueError, RecursionError, MemoryError) as error:
             errors.append({"path": path, "error": str(error)})

@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from octane.bisect import _first_bad
 from octane.db import ProjectIntelligence
 from octane.github import GitHubIntegration
 from octane.process import run_bounded
@@ -32,6 +33,14 @@ class IntegrationTests(unittest.TestCase):
         self.project = self.pil.create_project("integrations", self.root)["id"]
         self.actor = self.pil.register_agent(self.project, "integrator", "observer", [], ["write_evidence"])["id"]
         self.github = GitHubIntegration(self.pil, self.project, self.actor)
+
+    def test_bisect_completion_supports_old_and_new_git_output(self):
+        for sha in ("a" * 40, "b" * 64):
+            for term in ("bad", "'bad'"):
+                output = "Bisecting: 0 revisions left\n" + sha + " is the first " + term + " commit\ncommit details\n"
+                self.assertEqual(_first_bad(output), sha)
+        self.assertIsNone(_first_bad("subject: the branch is the first bad commit"))
+        self.assertIsNone(_first_bad("abc is the first 'bad' commit\n"))
 
     def test_github_issue_and_workflow_ingest_and_publication_approval(self):
         issue = {"number": 3, "title": "Zero fails", "body": "Expected zero", "html_url": "https://github.com/o/r/issues/3"}

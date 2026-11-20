@@ -127,7 +127,7 @@ Rules are `idempotent`, `roundtrip`, and `differential`. The latter two require 
 }
 ```
 
-Git metadata and safe source archives are handled on the host in temporary storage. Every project check runs in the configured container, with bad-revision baseline tests overlaid across revisions and one pinned image. The good endpoint must exit 0 and the bad endpoint 1. Other exits, timeouts, and cleanup failures are skipped. The result reports the first bad commit only when the search completes; ambiguous histories and exhausted budgets remain incomplete. Builds must fit the explicit command and offline image. No worktree is checked out over the user's project. Native CLI: `octane native bisect --help`.
+Git metadata and safe source archives are handled on the host in temporary storage. Every project check runs in the configured container, with bad-revision baseline tests overlaid across revisions and one pinned image. The good endpoint must exit 0 and the bad endpoint 1. Other exits, timeouts, and cleanup failures are skipped. Completion recognizes both older Git output and the quoted bad-term format used by newer Git. The result reports the first bad commit only when the search completes; ambiguous histories and exhausted budgets remain incomplete. Builds must fit the explicit command and offline image. No worktree is checked out over the user's project. Native CLI: `octane native bisect --help`.
 
 ## GitHub evidence and publication
 
@@ -181,3 +181,5 @@ The November 20 validation replayed one real historical Blinker fix: [maintainer
 - [LSP 3.17 specification](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/).
 - [in-toto Statement v1](https://github.com/in-toto/attestation/blob/main/spec/v1/statement.md).
 - [Podman run and user namespaces](https://docs.podman.io/en/latest/markdown/podman-run.1.html).
+
+- [Git bisect completion implementation](https://github.com/git/git/blob/master/bisect.c).

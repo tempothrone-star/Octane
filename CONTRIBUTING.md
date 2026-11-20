@@ -29,3 +29,5 @@ COVERAGE_FILE="$PWD/.coverage" COVERAGE_RCFILE="$PWD/.coveragerc" .venv/bin/cove
 ```
 
 Use a GitHub no-reply email for new commits when you want to keep a personal address out of public history.
+
+The optional parser uses the tested pair `tree-sitter-languages==1.10.2` and `tree-sitter==0.21.3`. The bundled loader calls `Language(path, name)` and `Parser.set_language`; runtime 0.22+ changes that API. Dependabot excludes those incompatible standalone runtime updates until the loader and grammar bundle are migrated together. Validate future parser changes with `pip install '.[ast]'` and the optional-parser suite; disabling that job or silently accepting heuristic fallback does not validate a parser upgrade.

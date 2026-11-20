@@ -252,12 +252,13 @@ class PlatformRegressionTests(unittest.TestCase):
         from types import SimpleNamespace
         from unittest.mock import MagicMock
         from octane.process import _wait_kqueue, stop_process_group
-        events = MagicMock(); events.__enter__.return_value = events; events.control.return_value = [object()]
+        events = MagicMock(); events.control.return_value = [object()]
         backend = SimpleNamespace(kqueue=lambda: events, kevent=lambda *a, **k: object(), KQ_FILTER_PROC=1,
                                   KQ_EV_ADD=2, KQ_EV_ONESHOT=4, KQ_NOTE_EXIT=8)
         child = SimpleNamespace(pid=123, args=['probe'])
         with patch('octane.process.select', backend):
             self.assertIsNone(_wait_kqueue(child, 1))
+            events.close.assert_called_once()
             events.control.return_value = []
             with self.assertRaises(subprocess.TimeoutExpired):
                 _wait_kqueue(child, 1)

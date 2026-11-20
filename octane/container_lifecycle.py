@@ -19,6 +19,14 @@ DEADLINE_LABEL = 'io.octane.deadline'
 RUN_LABEL = 'io.octane.run'
 
 
+def engine_environment():
+    # Trusted cleanup must reach the same daemon/context as the original engine client.
+    keys = ('HOME', 'DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH',
+            'CONTAINER_HOST', 'CONTAINER_CONNECTION', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'CONTAINERS_CONF',
+            'DBUS_SESSION_BUS_ADDRESS', 'SSH_AUTH_SOCK', 'SSL_CERT_FILE', 'SSL_CERT_DIR')
+    return {**git_environment(), **{key: os.environ[key] for key in keys if key in os.environ}}
+
+
 def owner_key(storage):
     return hashlib.sha256(str(Path(storage).resolve()).encode()).hexdigest()[:32]
 
@@ -109,7 +117,7 @@ def execution_guard(engine, storage, database, run_id, deadline):
         # Direct file invocation also works for installed wheels and scrubbed envs.
         watcher = subprocess.Popen([sys.executable, str(Path(__file__).with_name('container_watchdog.py')),
                                     engine, name, str(deadline), str(database), run_id],
-                                   env=git_environment(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   env=engine_environment(), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                    stderr=subprocess.DEVNULL, start_new_session=os.name == 'posix')
         import threading
         if threading.current_thread() is threading.main_thread():

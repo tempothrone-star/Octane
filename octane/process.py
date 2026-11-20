@@ -5,6 +5,7 @@ import os
 import signal
 import select
 import sys
+from contextlib import closing
 import subprocess
 import threading
 import time
@@ -28,7 +29,7 @@ def wait_unreaped(process, timeout):
 
 def _wait_kqueue(process, timeout):
     # macOS Python 3.12 lacks waitid; NOTE_EXIT observes without collecting the PID.
-    with select.kqueue() as events:
+    with closing(select.kqueue()) as events:
         change = select.kevent(process.pid, filter=select.KQ_FILTER_PROC,
                                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=select.KQ_NOTE_EXIT)
         try:

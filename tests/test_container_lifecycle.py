@@ -12,7 +12,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from octane.container_lifecycle import register_deadline, finish_interrupted, lifecycle_arguments, owner_key, reap_expired, remove_container
+from octane.container_lifecycle import engine_environment, register_deadline, finish_interrupted, lifecycle_arguments, owner_key, reap_expired, remove_container
 from octane.container_watchdog import enforce
 from octane.db import ProjectIntelligence
 from octane.workspace import WorkspaceManager
@@ -21,6 +21,15 @@ IMAGE = os.environ.get('OCTANE_TEST_DOCKER_IMAGE')
 
 
 class LifecycleUnitTests(unittest.TestCase):
+    def test_watchdog_preserves_engine_context_without_forwarding_arbitrary_secrets(self):
+        with patch.dict(os.environ, {'SECRET_TOKEN': 'private-fixture', 'DOCKER_CONTEXT': 'operator-context',
+                                    'XDG_RUNTIME_DIR': '/run/user/fixture', 'HOME': '/operator-home'}):
+            environment = engine_environment()
+        self.assertNotIn('SECRET_TOKEN', environment)
+        self.assertEqual(environment['DOCKER_CONTEXT'], 'operator-context')
+        self.assertEqual(environment['XDG_RUNTIME_DIR'], '/run/user/fixture')
+        self.assertEqual(environment['HOME'], '/operator-home')
+
     def test_removal_errors_and_arguments_are_bounded(self):
         with patch('octane.container_lifecycle.subprocess.run', side_effect=OSError):
             self.assertFalse(remove_container('docker', 'octane-run-test'))

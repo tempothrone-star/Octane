@@ -142,7 +142,12 @@ class LanguageServer:
         if self.writer is not None:
             self.writer.join(timeout=2)
         if self.writer is None or not self.writer.is_alive():
-            self.process.stdin.close()
+            try:
+                self.process.stdin.close()
+            except BrokenPipeError:
+                # Buffered stdin may flush during close after a failed server exited.
+                # Preserve the original provider failure and continue draining diagnostics.
+                pass
         self.reader.join(timeout=2)
         if not self.reader.is_alive():
             self.process.stdout.close()

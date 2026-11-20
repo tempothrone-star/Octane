@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from octane.db import ProjectIntelligence
 from octane.language_server import LanguageServer, semantic_calls
@@ -41,6 +42,19 @@ class LanguageServerTests(unittest.TestCase):
             LanguageServer("shell-command", self.root)
         with self.assertRaisesRegex(ValueError, "python and typescript"):
             semantic_calls(self.root, [], {}, "revision", [], {"unknown": ["server"]})
+
+    def test_exited_server_broken_pipe_on_stdin_close_does_not_skip_cleanup(self):
+        server = LanguageServer([sys.executable, "-c", "import sys; print('provider exited',file=sys.stderr)"], self.root)
+        server.process.wait(timeout=5)
+        original_close = server.process.stdin.close
+        try:
+            with patch.object(server.process.stdin, "close", side_effect=BrokenPipeError("exited")):
+                server.close()
+            self.assertTrue(server.process.stdout.closed)
+            self.assertTrue(server.process.stderr.closed)
+            self.assertIn("provider exited", server.diagnostics)
+        finally:
+            original_close()
 
     def test_unresponsive_server_cannot_block_large_request_writes(self):
         server = LanguageServer([sys.executable, "-c", "import time; time.sleep(60)"], self.root, timeout=0.1)

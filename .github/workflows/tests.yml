@@ -102,6 +102,10 @@ jobs:
       - run: coverage report --include='octane/provenance.py' --fail-under=90
       - run: coverage report --include='octane/process.py' --fail-under=90
       - run: coverage report --include='octane/language_server.py' --fail-under=85
+      - run: coverage report --include='octane/localization.py' --fail-under=95
+      - run: coverage report --include='octane/holdout.py' --fail-under=90
+      - run: coverage report --include='octane/performance.py' --fail-under=95
+      - run: coverage report --include='octane/diagnostics.py' --fail-under=90
 
   semantic-and-provenance:
     runs-on: ubuntu-latest

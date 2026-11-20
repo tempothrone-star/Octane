@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import re
 import tempfile
+import time
 
 from .source_archive import export_revision, resolve_revision, git
 from .analysis import analyzer
@@ -40,6 +41,7 @@ def _command(case, explicit, standard):
 
 
 def evaluate_case(manager, project_id, case, image):
+    started = time.monotonic()
     project = manager.intelligence.get_project(project_id)
     root = Path(project["root"])
     revision = resolve_revision(root, case["base_commit"])
@@ -59,6 +61,7 @@ def evaluate_case(manager, project_id, case, image):
             source, _ = analyzer()
             trace = baseline["stderr"].replace("/workspace/", str(checkout) + "/")
             ranking = source.locate_suspects(checkout, trace, query=case.get("problem_statement", ""))
+            hypothesis_seconds = time.monotonic() - started
             ranked = [item["path"] for item in ranking["suspects"]]
             expected = set(case.get("expected_files", []))
             rank = next((index for index, name in enumerate(ranked, 1) if name in expected), None)
@@ -77,7 +80,7 @@ def evaluate_case(manager, project_id, case, image):
                             for run in (baseline, before, after, preserved))
                         and all(run["test_integrity"] == baseline["test_integrity"] for run in (before, after, preserved)))
             return {"instance_id": case["instance_id"], "base_commit": revision, "resolved": resolved,
-                    "localization_rank": rank, "ranked_files": ranked[:20], "image_id": immutable,
+                    "localization_rank": rank, "first_hypothesis_seconds": hypothesis_seconds, "ranked_files": ranked[:20], "image_id": immutable,
                     "baseline_run_id": baseline["run_id"], "candidate_run_id": after["run_id"],
                     "preservation_run_ids": [before["run_id"], preserved["run_id"]],
                     "evidence_ids": [run["evidence_id"] for run in (baseline, before, after, preserved)]}
@@ -109,17 +112,22 @@ def evaluate_dataset(manager, project_id, relative_path, image, agent_id, limit=
             outcomes.append(evaluate_case(manager, project_id, case, image))
         except (ValueError, KeyError, OSError) as exc:
             outcomes.append({"instance_id": case.get("instance_id"), "resolved": False, "error": str(exc)})
-    labeled = [case for case, outcome in zip(cases, outcomes) if case.get("expected_files") and "error" not in outcome]
-    ranks = [outcome.get("localization_rank") for case, outcome in zip(cases, outcomes)
-             if case.get("expected_files") and "error" not in outcome]
-    tested = len(outcomes)
-    payload = {"schema": "octane.evaluation.v1", "cases": outcomes, "case_count": tested,
-               "resolved": sum(item["resolved"] for item in outcomes),
-               "resolved_rate": sum(item["resolved"] for item in outcomes) / tested if tested else None,
-               "localization_mrr": sum(1 / rank if rank else 0 for rank in ranks) / len(labeled) if labeled else None,
-               "localization_top1": sum(rank == 1 for rank in ranks) / len(labeled) if labeled else None,
-               "truncated": len(cases) > limit,
-               "basis": "User-supplied local cases and candidate patches with independently selected test commands"}
+    payload = _evaluation_summary(cases, outcomes, limit)
     evidence = manager.intelligence.submit_evidence(project_id, "evaluation_result", payload,
         "Recorded container-backed repair evaluation", agent_id, project["revision"], verification_status="observed")
     return {"evidence_id": evidence["id"], **payload}
+
+
+def _evaluation_summary(cases, outcomes, limit):
+    # Execution errors count as misses instead of silently shrinking the labeled denominator.
+    ranks = [outcome.get("localization_rank") for case, outcome in zip(cases, outcomes) if case.get("expected_files")]
+    tested = len(outcomes)
+    return {"schema": "octane.evaluation.v2", "cases": outcomes, "case_count": tested,
+            "resolved": sum(item["resolved"] for item in outcomes),
+            "resolved_rate": sum(item["resolved"] for item in outcomes) / tested if tested else None,
+            "localization_mrr": sum(1 / rank if rank else 0 for rank in ranks) / len(ranks) if ranks else None,
+            "localization_top1": sum(rank == 1 for rank in ranks) / len(ranks) if ranks else None,
+            "localization_top5": sum(rank is not None and rank <= 5 for rank in ranks) / len(ranks) if ranks else None,
+            "localization_labeled_cases": len(ranks), "error_count": sum("error" in row for row in outcomes),
+            "truncated": len(cases) > limit,
+            "basis": "User-supplied local cases and patches; file-level labels, not autonomous fix discovery. Errors count as misses"}

@@ -272,7 +272,8 @@ def propose_patch(manager: WorkspaceManager, project_id: str, investigation_id: 
                   baseline_run_id: str, candidate_run_id: str, regression_run_ids: list[str],
                   rationale: str, supporting_evidence_ids: list[str], agent_id: str,
                   *, strict_preservation_output: bool = False, allow_test_changes: bool = False,
-                  test_changes_rationale: str = "", allow_build_changes: bool = False, build_changes_rationale: str = ""):
+                  test_changes_rationale: str = "", allow_build_changes: bool = False, build_changes_rationale: str = "",
+                  final_validation: dict | None = None):
     ids = _proposal_arguments(strict_preservation_output, allow_test_changes, rationale,
                               regression_run_ids, supporting_evidence_ids, baseline_run_id, candidate_run_id)
     intelligence = manager.intelligence
@@ -306,7 +307,7 @@ def propose_patch(manager: WorkspaceManager, project_id: str, investigation_id: 
                    "baseline_run_id": baseline_run_id, "candidate_run_id": candidate_run_id,
                    "regression_run_ids": regression_run_ids, "supporting_evidence_ids": supporting_evidence_ids,
                    "intent_evidence_ids": intent_ids, "preservation_pairs": preservation_pairs,
-                   "mutation_results": mutations, "build_changes": build_review,
+                   "mutation_results": mutations, "build_changes": build_review, "final_validation": final_validation,
                    "mutation_support": mutation_support(comparison["differences"]),
                    "changed_paths": scope, "review_notes": comparison["review_notes"],
                    "test_changes": {"allowed": allow_test_changes, "paths": changed_tests,

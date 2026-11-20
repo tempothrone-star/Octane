@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0
+
+- Compare bounded ordered Python numeric traces and import ordered traces/per-test spectra from other runtimes. Record first observed divergence and Ochiai line ranking with explicit flaky/unstable exclusions.
+- Attribute and fuse SARIF findings by failing/changed-path proximity. Add reviewed Tree-sitter query hypotheses with Python AST fallback, source hashing and bounded content caching.
+- Order impacted tests first while retaining the required full suite. Rank current gate-qualified proposals by masking warnings and diff size.
+- Require an optional operator-owned withheld suite before bridge proposals. Freeze/mount it read-only, bind the current candidate/image, and withhold command output before persistence; include validation metadata in the proposal payload.
+- Add a paired optimization decision with exact >=95% median intervals, variance, preserved output and distinct recorded executions.
+- Run seeded localization, holdout and latency acceptance checks in Docker CI. Publish measured scope/limits in [accuracy workflow](docs/accuracy-workflow.md). Public-history evaluation now includes top-5 and first-hypothesis timing; execution errors count as localization misses.
+
+
 ## 0.2.1 — 2026-11-20
 
 - Replace the five-function complexity check with a production-wide Python gate and committed non-growing baseline. New functions above 30 fail; reduced exceptions must be ratcheted down. Methods, nested functions, and repeated names are included without class-score double counting.

@@ -84,7 +84,12 @@ class WorkspaceOperations:
 
     def _op_workspace_propose(self, p: dict[str, Any]) -> dict[str, Any]:
         manager, project_id = self._workspace(_required(p, "workspaceId", str))
-        return propose_patch(manager, project_id, _required(p, "investigationId", str), p["workspaceId"],
+        holdout = None
+        if self.holdout_policy is not None:
+            from .holdout import validate_holdout
+            holdout = validate_holdout(manager, p["workspaceId"], _required(p, "candidateRunId", str),
+                                      self.holdout_policy, [*self.allowed_roots, self.workspace_root])
+        result = propose_patch(manager, project_id, _required(p, "investigationId", str), p["workspaceId"],
                              _required(p, "baselineRunId", str), _required(p, "candidateRunId", str),
                              _required(p, "regressionRunIds", list), _required(p, "rationale", str),
                              _required(p, "evidenceIds", list), self._actor(project_id, "workflow"),
@@ -92,7 +97,12 @@ class WorkspaceOperations:
                              allow_test_changes=p.get("allowTestChanges", False),
                              test_changes_rationale=p.get("testChangesRationale", ""),
                              allow_build_changes=p.get("allowBuildChanges", False),
-                             build_changes_rationale=p.get("buildChangesRationale", ""))
+                             build_changes_rationale=p.get("buildChangesRationale", ""), final_validation=holdout)
+        if holdout is not None:
+            result["holdout"] = holdout
+            self.intelligence.link_evidence(result["evidence_id"], holdout["evidence_id"], "context",
+                                            self._actor(project_id, "write_evidence"))
+        return result
 
     def _op_workspace_mutate(self, p: dict[str, Any]) -> dict[str, Any]:
         manager, project_id = self._workspace(_required(p, "workspaceId", str))
@@ -129,6 +139,14 @@ class WorkspaceOperations:
             raise PermissionError("evaluation image is outside allowedDockerImages")
         return evaluate_dataset(self._workspace_manager(), project_id, _required(p, "datasetPath", str), image,
                                  self._actor(project_id, "workflow"), p.get("caseLimit", 5))
+
+    def _op_workspace_benchmark(self, p: dict[str, Any]) -> dict[str, Any]:
+        from .performance import compare_recorded
+        project_id = _required(p, "projectId", str)
+        self._project(project_id)
+        return compare_recorded(self._workspace_manager(), project_id, _required(p, "baselineRunIds", list),
+                                _required(p, "candidateRunIds", list), _required(p, "preservationPairs", list),
+                                self._actor(project_id, "workflow"), p.get("minimumImprovement", 0.05))
 
     def _op_workspace_destroy(self, p: dict[str, Any]) -> dict[str, bool]:
         manager, _ = self._workspace(_required(p, "workspaceId", str))

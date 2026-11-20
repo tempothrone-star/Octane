@@ -10,7 +10,7 @@ import xml.etree.ElementTree as ET
 MAX_REPORT_BYTES = 4_000_000
 MAX_RECORDS = 10_000
 FORMATS = {"junit", "pytest", "go-test", "jest", "coverage", "go-coverage", "sarif", "sentry", "otel",
-           "mutmut", "stryker", "pit", "github"}
+           "mutmut", "stryker", "pit", "github", "spectrum", "ordered-trace"}
 
 
 def _source(value, root):
@@ -118,10 +118,13 @@ def _go_coverage(raw, root):
 def _sarif(data, root):
     findings = []
     for run in data.get("runs", []):
+        driver = run.get("tool", {}).get("driver", {})
         for item in run.get("results", []):
             locations = item.get("locations", [])
             location = locations[0].get("physicalLocation", {}) if locations else {}
-            findings.append({"rule": item.get("ruleId"), "level": item.get("level", "warning"),
+            findings.append({"tool": str(driver.get("name", "unknown"))[:120],
+                             "tool_version": str(driver.get("semanticVersion", driver.get("version", "")))[:80],
+                             "rule": item.get("ruleId"), "level": item.get("level", "warning"),
                              "message": item.get("message", {}).get("text", "")[:2000],
                              "path": _source(location.get("artifactLocation", {}).get("uri"), root),
                              "line": location.get("region", {}).get("startLine")})
@@ -191,7 +194,13 @@ def parse_report(raw: bytes, format_name: str, root: Path):
             result = _mutation(_xml(raw), format_name)
         else:
             data = json.loads(raw)
-            if format_name in {"mutmut", "stryker"}:
+            if format_name == "spectrum":
+                from .localization import normalize_spectrum
+                result = {"test_spectra": normalize_spectrum(data)}
+            elif format_name == "ordered-trace":
+                from .trace_events import validate_timeline
+                result = {"ordered_trace": validate_timeline(data)}
+            elif format_name in {"mutmut", "stryker"}:
                 result = _mutation(data, format_name)
             elif format_name == "github":
                 result = {"issue": {key: data.get(key) for key in ("number", "title", "body", "html_url", "state")}}

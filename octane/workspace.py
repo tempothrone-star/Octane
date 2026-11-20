@@ -174,7 +174,8 @@ class WorkspaceManager:
     def _docker_run(self, workspace: dict[str, Any], command: list[str], image: str, timeout: int, writable: bool,
                     investigation_id: str | None, python_trace: bool,
                     native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
-                    report_format: str | None = None, allow_build_changes: bool = False, build_changes_rationale: str = "") -> dict[str, Any]:
+                    report_format: str | None = None, allow_build_changes: bool = False, build_changes_rationale: str = "",
+                    private_suite: Path | None = None) -> dict[str, Any]:
         traced_command, runner = self._execution_options(command, image, timeout, python_trace,
                                                           native_trace_symbols, runtime_trace, report_format)
         docker = self._execution_engine()
@@ -195,6 +196,7 @@ class WorkspaceManager:
         image_id = self._image_identity(docker, image)
         args = self._container_arguments(docker, workspace, cid_name, mount_mode, container_user,
                                          writable, baseline, test_mounts)
+        args += _private_mount(private_suite)
         buffers = {"stdout": bytearray(), "stderr": bytearray()}
         truncated = {"stdout": False, "stderr": False}
         max_output = 1_000_000
@@ -204,7 +206,7 @@ class WorkspaceManager:
         before_hash = _tree_hash(Path(workspace["path"]))
         run_id = _id("RUN")
         started = time.monotonic()
-        self._begin_run(workspace, investigation_id, run_id, command, image, image_id, before_hash)
+        self._begin_run(workspace, investigation_id, run_id, _recorded_command(command, private_suite), image, image_id, before_hash)
         trace_result = None
         trace_file = None
         report_file, report, report_error = None, None, None
@@ -276,6 +278,7 @@ class WorkspaceManager:
                                                         "reason": "Runtime profile did not complete or could not be read"}
         if report_format is not None:
             output.update(report_format=report_format, report=report, report_error=report_error)
+        _withhold_private_output(output, private_suite is not None)
         return self._record_execution(workspace, output, timed_out, returncode, run_id)
 
     @staticmethod
@@ -488,7 +491,8 @@ def _load_python_trace(path: Path) -> dict[str, Any] | None:
         data = json.loads(raw)
     except (OSError, ValueError, RecursionError):
         return None
-    if (not isinstance(data, dict) or set(data) != {"calls", "entries", "exceptions", "events", "truncated"}
+    if (not isinstance(data, dict) or set(data) not in ({"calls", "entries", "exceptions", "events", "truncated"},
+                                   {"calls", "entries", "exceptions", "events", "truncated", "timeline", "timeline_truncated"})
             or type(data["events"]) is not int or not 0 <= data["events"] <= 50000 or type(data["truncated"]) is not bool
             or any(not isinstance(data[field], list) or len(data[field]) > 150
                    for field in ("calls", "entries", "exceptions"))):
@@ -505,6 +509,12 @@ def _load_python_trace(path: Path) -> dict[str, Any] | None:
                 return None
     except (TypeError, KeyError):
         return None
+    if "timeline" in data:
+        from .trace_events import validate_timeline
+        try:
+            validate_timeline(data)
+        except ValueError:
+            return None
     nodes, edges = {}, {}
     for frame in data["entries"]:
         key = (frame["path"], frame["function"], frame["definition_line"])
@@ -619,3 +629,21 @@ def _stop_container(docker: str, cid_file: str) -> str | None:
     if result.returncode != 0:
         return f"Docker timeout cleanup failed: {result.stderr.strip()}"
     return None
+
+
+def _recorded_command(command, private_suite):
+    return ["<operator-withheld>"] if private_suite is not None else command
+
+
+def _private_mount(suite):
+    return ["--mount", f"type=bind,source={suite},target=/octane-holdout,readonly"] if suite is not None else []
+
+
+def _withhold_private_output(output, enabled=True):
+    """Apply before either the execution row or the general evidence ledger is written."""
+    if not enabled:
+        return
+    digest = hashlib.sha256(json.dumps([output["stdout"], output["stderr"]]).encode()).hexdigest()
+    command_hash = hashlib.sha256(json.dumps(output.get("command", [])).encode()).hexdigest()
+    output.update(stdout="", stderr="", command=["<operator-withheld>"], private_command_sha256=command_hash,
+                  private_validation=True, output_sha256=digest)

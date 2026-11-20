@@ -42,12 +42,16 @@ function resolveConfig(config) {
   if (config.allowDefaultContainerUser !== undefined && typeof config.allowDefaultContainerUser !== "boolean") {
     throw new Error("allowDefaultContainerUser must be a boolean.");
   }
+  if (config.holdoutPolicy !== undefined && (typeof config.holdoutPolicy !== "string" || !isAbsolute(config.holdoutPolicy))) {
+    throw new Error("holdoutPolicy must be an absolute operator-owned policy path.");
+  }
   const python = typeof config.pythonExecutable === "string" && config.pythonExecutable.trim()
     ? config.pythonExecutable
     : process.platform === "win32" ? "python" : "python3";
   return { allowedRoots, databasePath, workspaceRoot, allowedImages: [...new Set(allowedImages)],
     allowAgentProvisioning: config.allowAgentProvisioning === true,
     allowDefaultContainerUser: config.allowDefaultContainerUser === true,
+    holdoutPolicy: config.holdoutPolicy,
     languageServers: config.languageServers || {},
     containerEngine: config.containerEngine || "docker", containerRuntime: config.containerRuntime, python };
 }
@@ -67,6 +71,7 @@ export function callBridge(config, operation, params, context = {}) {
   for (const image of resolved.allowedImages) args.push("--allowed-image", image);
   if (resolved.allowAgentProvisioning) args.push("--allow-agent-provisioning");
   if (resolved.allowDefaultContainerUser) args.push("--allow-default-container-user");
+  if (resolved.holdoutPolicy) args.push("--holdout-policy", resolved.holdoutPolicy);
   args.push("--language-servers", JSON.stringify(resolved.languageServers));
   args.push("--container-engine", resolved.containerEngine);
   if (resolved.containerRuntime) args.push("--container-runtime", resolved.containerRuntime);

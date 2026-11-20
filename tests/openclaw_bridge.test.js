@@ -43,6 +43,7 @@ test("JavaScript bridge round trips through the real Python JSON protocol", asyn
   const sandboxTriage = await callBridge(config, "repair_triage", { root: "/workspace" }, { workspaceDir: checkout, sandboxed: true });
   assert.equal(sandboxTriage.root, checkout);
   await assert.rejects(callBridge(config, "not_an_operation", {}), /operation/i);
+  assert.throws(() => callBridge({...config, holdoutPolicy: "relative.json"}, "project_list", {}), /absolute operator-owned/);
   assert.throws(() => callBridge({}, "project_list", {}), /allowedProjectRoots/);
 });
 
@@ -51,7 +52,7 @@ test("npm package contains both runtimes, skill migrations, and linked documenta
     cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8",
   });
   const files = new Set(JSON.parse(output)[0].files.map((file) => file.path));
-  for (const path of ["CHANGELOG.md", "docs/polish-review.md", "docs/follow-up-review.md", "octane/host_environment.py", "octane/build_config.py", "octane/mutation_support.py", "octane/sigstore.py", "octane/sarif.py", "mcp/server.js", "examples/blinker-pr149.jsonl", "docs/integrations.md", "docs/evaluation.md", "openclaw/tools.js", "LICENSE", "SECURITY.md", "CONTRIBUTING.md", "openclaw/index.js", "openclaw/bridge.js", "openclaw.plugin.json",
+  for (const path of ["docs/accuracy-workflow.md", "octane/localization.py", "octane/holdout.py", "octane/diagnostics.py", "CHANGELOG.md", "docs/polish-review.md", "docs/follow-up-review.md", "octane/host_environment.py", "octane/build_config.py", "octane/mutation_support.py", "octane/sigstore.py", "octane/sarif.py", "mcp/server.js", "examples/blinker-pr149.jsonl", "docs/integrations.md", "docs/evaluation.md", "openclaw/tools.js", "LICENSE", "SECURITY.md", "CONTRIBUTING.md", "openclaw/index.js", "openclaw/bridge.js", "openclaw.plugin.json",
     "octane/openclaw_bridge.py", "octane/python_calls.py", "octane/repair.py", "octane/trace_runner.py",
     "octane/native_trace.py", "octane/native_trace_runner.py",
     "octane/syntax_calls.py", "octane/runtime_profiles.py", "octane/call_plot.py", "octane/focus.py", "octane/node_trace_runner.cjs",

@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased — audit hardening
+## 1.0.1 — 2026-11-20
+
+- Update Tree-sitter from 0.25.2 to 0.26.1 while retaining the bundled offline language pack.
+- Add ClawHub repository, homepage and OpenClaw build metadata.
+- Clearly disclose AI-assisted development, maintainer direction and validation limits in the README.
+
+## 1.0.0 — 2026-11-20
 
 - Share bounded-pass redaction across both stores; cover quoted JSON/assignment values, Basic authentication, Slack/Google keys and megabyte blobs.
 - Name/label container jobs and add SIGTERM cleanup, independent crash deadlines and owned expired-run recovery. Replace the trace-only 512 KiB process-wide file cap with a documented 64 MiB per-file cap.
@@ -8,10 +14,7 @@
 - Require explicit trusted-project opt-in for host language servers, report queue overflow promptly, and signal process groups before reaping their leader.
 - Check ledger anchor/tail during append, retain explicit full verification, and skip schema write transactions when opening current stores.
 - Log skipped archive symlinks, include added/deleted regular text files in proposals, and default MCP attribution to fresh connection IDs.
-- Migrate to bundled `tree-sitter-language-pack==0.13.0` / `tree-sitter==0.25.2`; add Python 3.13/3.14 parser checks and Windows/macOS portable-host CI. Keep package metadata at 1.0.0 pending a release decision.
-
-
-## 1.0.0 — 2026-11-20
+- Migrate to bundled `tree-sitter-language-pack==0.13.0` / `tree-sitter==0.25.2`; add Python 3.13/3.14 parser checks and Windows/macOS portable-host CI.
 
 - Compare bounded ordered Python numeric traces and import ordered traces/per-test spectra from other runtimes. Record first observed divergence and Ochiai line ranking with explicit flaky/unstable exclusions.
 - Attribute and fuse SARIF findings by failing/changed-path proximity. Add reviewed Tree-sitter query hypotheses with Python AST fallback, source hashing and bounded content caching.

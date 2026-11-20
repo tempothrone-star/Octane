@@ -18,6 +18,8 @@ The 0.2.1 [polish follow-up](docs/polish-review.md) extends complexity enforceme
 
 Release 1.0.0 adds ordered trace comparison, per-test fault localization, analyzer fusion, coverage-based test ordering, operator-owned holdout checks, proposal ranking, and a statistical optimization gate. See the [accuracy workflow and measured limits](docs/accuracy-workflow.md).
 
+Release 1.0.1 updates Tree-sitter to 0.26.1 and includes ClawHub source/build metadata and the development disclosure above.
+
 ## Install
 
 Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on the Gateway host. Docker is used for isolated execution; rootless Podman and configured gVisor adapters are also available.

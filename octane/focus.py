@@ -7,6 +7,7 @@ from .analysis import analyzer
 from .call_plot import call_plot
 from .python_calls import analyze_python
 from .syntax_calls import analyze_syntax_calls
+from .language_server import semantic_calls
 
 _MAX_FILE = 256 * 1024
 _MAX_BYTES = 2 * 1024 * 1024
@@ -39,7 +40,7 @@ def _source_scope(root, path, source):
     return files[:_MAX_FILES], partial
 
 
-def repair_focus(root: Path, path: str | None, query: str | None, limit: int) -> dict:
+def repair_focus(root: Path, path: str | None, query: str | None, limit: int, language_servers=None) -> dict:
     if query is not None and (not isinstance(query, str) or not 1 <= len(query.strip()) <= 160):
         raise ValueError("focus query must be a symbol name of 1 to 160 characters")
     if path is None and query is None:
@@ -83,6 +84,11 @@ def repair_focus(root: Path, path: str | None, query: str | None, limit: int) ->
     extra, extra_calls, coverage = analyze_syntax_calls(polygraph.ast_backend, files, contents, "working-copy", graph["edges"])
     symbols += extra
     calls += extra_calls
+    semantic_symbols, semantic_edges, semantic_coverage = semantic_calls(
+        root, files, contents, "working-copy", symbols, language_servers)
+    symbols = list({node["node_key"]: node for node in symbols + semantic_symbols}.values())
+    resolved = {key for item in semantic_coverage.values() for key in item["analyzed_callers"]}
+    calls = [edge for edge in calls if edge["source"] not in resolved] + semantic_edges
     matches = [node for node in symbols if query is None or query in node["name"].casefold()]
     matches.sort(key=lambda node: (node["name"].casefold() != query,
                                    node["name"].casefold().rsplit(".", 1)[-1] != query,
@@ -108,5 +114,6 @@ def repair_focus(root: Path, path: str | None, query: str | None, limit: int) ->
     return {"status": "ready" if selected else "no_matching_symbol", "files_examined": examined,
             "files_analyzed": len(contents), "bytes_read": total,
             "symbols": list(selected.values()), "connections": connections, "mermaid": call_plot(related, diagram),
-            "coverage": coverage, "python_parse_errors": len(errors), "truncated": truncated or len(matches) > limit,
+            "coverage": coverage, "language_servers": semantic_coverage,
+            "python_parse_errors": len(errors), "truncated": truncated or len(matches) > limit,
             "basis": "Bounded static candidates from the working copy. Confirm the path with a focused reproduction."}

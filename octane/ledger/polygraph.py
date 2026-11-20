@@ -8,7 +8,6 @@ from __future__ import annotations
 import ast
 import posixpath
 import re
-from collections import Counter, defaultdict
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 

@@ -9,44 +9,19 @@ from .analysis import analyzer
 from .db import ProjectIntelligence, _id, _now
 from .python_calls import analyze_python
 from .syntax_calls import analyze_syntax_calls
+from .language_server import semantic_calls
 
 
 class ProjectScanner:
     def scan(self, intelligence: ProjectIntelligence, project_id: str, *, parser="auto",
              max_files=100000, max_file_bytes=5 * 1024 * 1024, max_total_bytes=100 * 1024 * 1024,
-             only_if_changed=False):
+             only_if_changed=False, language_servers=None):
         project = intelligence.get_project(project_id)
         if project is None:
             raise KeyError(project_id)
         root = Path(project["root"]).resolve(strict=True)
-        source, polygraph = analyzer()
-        inventory = source.source_inventory(root, max_files, max_file_bytes)
-        if inventory["truncated"] or inventory["skipped"].get("over_file_size_limit") or inventory["skipped"].get("unreadable"):
-            raise ValueError("scan is incomplete under the selected limits; no index was updated")
-        if type(max_total_bytes) is not int or not 1 <= max_total_bytes <= 1024 ** 3:
-            raise ValueError("maxTotalBytes must be an integer from 1 to 1073741824")
-        if inventory["source_bytes"] > max_total_bytes:
-            raise ValueError("scan exceeds maxTotalBytes; no index was updated")
-        contents, hashes = {}, {}
-        for item in inventory["files"]:
-            path = root / item["path"]
-            if path.is_symlink() or not path.resolve().is_relative_to(root):
-                raise ValueError("source paths changed during indexing; retry the scan")
-            with path.open("rb") as stream:
-                content = stream.read(max_file_bytes + 1)
-            if len(content) != item["bytes"] or len(content) > max_file_bytes:
-                raise ValueError("source size changed during indexing; retry the scan")
-            contents[item["path"]] = content
-            hashes[item["path"]] = hashlib.sha256(content).hexdigest()
-        # Go module metadata affects import resolution but has no source extension.
-        go_mod = root / "go.mod"
-        if not go_mod.is_symlink() and go_mod.is_file():
-            with go_mod.open("rb") as stream:
-                module_bytes = stream.read(min(max_file_bytes, 1024 ** 2) + 1)
-            if len(module_bytes) > min(max_file_bytes, 1024 ** 2) or inventory["source_bytes"] + len(module_bytes) > max_total_bytes:
-                raise ValueError("Go module metadata exceeds scan limits; no index was updated")
-            hashes["go.mod"] = hashlib.sha256(module_bytes).hexdigest()
-            contents["go.mod"] = module_bytes
+        _, polygraph = analyzer()
+        inventory, contents, hashes = self._read_snapshot(root, max_files, max_file_bytes, max_total_bytes)
         revision = "tree-" + hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
         if only_if_changed and revision == project["revision"]:
             return {"project_id": project_id, "revision": revision, "changed_files": [], "removed_files": []}
@@ -62,21 +37,12 @@ class ProjectScanner:
         )
         symbols += syntax_symbols
         calls += syntax_calls
-        # The parser and hasher must have examined the same source bytes.
-        final_inventory = source.source_inventory(root, max_files, max_file_bytes)
-        if (final_inventory["truncated"] or final_inventory["skipped"].get("unreadable")
-                or final_inventory["skipped"].get("over_file_size_limit") or final_inventory["files"] != inventory["files"]):
-            raise ValueError("source file inventory changed during indexing; retry the scan")
-        if (not go_mod.is_symlink() and go_mod.is_file()) != ("go.mod" in hashes):
-            raise ValueError("Go module metadata changed during indexing; retry the scan")
-        for relative, digest in hashes.items():
-            path = root / relative
-            if path.is_symlink() or not path.resolve().is_relative_to(root):
-                raise ValueError("source paths changed during indexing; retry the scan")
-            with path.open("rb") as stream:
-                data = stream.read(max_file_bytes + 1)
-            if hashlib.sha256(data).hexdigest() != digest:
-                raise ValueError("source changed during indexing; retry the scan")
+        semantic_symbols, semantic_edges, semantic_coverage = semantic_calls(
+            root, inventory["files"], contents, revision, symbols, language_servers)
+        symbols += semantic_symbols
+        resolved = {key for item in semantic_coverage.values() for key in item["analyzed_callers"]}
+        calls = [edge for edge in calls if edge["source"] not in resolved] + semantic_edges
+        self._verify_snapshot(root, inventory, hashes, max_files, max_file_bytes)
         # The PIL stores one symbol per key and one edge per typed pair. Merge
         # repeated discoveries before writing so counts and history match the index.
         symbols = list({symbol["node_key"]: symbol for symbol in symbols}.values())
@@ -161,9 +127,62 @@ class ProjectScanner:
         return {"project_id": project_id, "revision": revision, "files_scanned": len(hashes),
                 "symbols_discovered": len(symbols), "relationships_discovered": len(edges),
                 "changed_files": changed, "removed_files": removed, "languages": inventory["languages"],
-                "parser_coverage": {**graph["parser_coverage"], "syntax_calls": syntax_coverage}, "parse_errors": parse_errors,
+                "parser_coverage": {**graph["parser_coverage"], "syntax_calls": syntax_coverage,
+                                    "language_servers": semantic_coverage}, "parse_errors": parse_errors,
                 "unsupported": sorted(inventory["unsupported_extensions"]),
                 "capabilities": {"python": ["symbols", "lexical_and_import_call_candidates", "imports"],
                                  "tree_sitter_call_candidates": sorted(language for language, counts in syntax_coverage.items() if counts.get("symbols")),
                                  "other_languages": ["file_hashes", "best_effort_imports"],
                                  "unsupported": ["semantic_types", "complete_data_flow", "runtime_reachability"]}}
+
+    @staticmethod
+    def _read_snapshot(root, max_files, max_file_bytes, max_total_bytes):
+        source, _ = analyzer()
+        inventory = source.source_inventory(root, max_files, max_file_bytes)
+        if inventory["truncated"] or inventory["skipped"].get("over_file_size_limit") or inventory["skipped"].get("unreadable"):
+            raise ValueError("scan is incomplete under the selected limits; no index was updated")
+        if type(max_total_bytes) is not int or not 1 <= max_total_bytes <= 1024 ** 3:
+            raise ValueError("maxTotalBytes must be an integer from 1 to 1073741824")
+        if inventory["source_bytes"] > max_total_bytes:
+            raise ValueError("scan exceeds maxTotalBytes; no index was updated")
+        contents, hashes = {}, {}
+        for item in inventory["files"]:
+            path = root / item["path"]
+            if path.is_symlink() or not path.resolve().is_relative_to(root):
+                raise ValueError("source paths changed during indexing; retry the scan")
+            with path.open("rb") as stream:
+                content = stream.read(max_file_bytes + 1)
+            if len(content) != item["bytes"] or len(content) > max_file_bytes:
+                raise ValueError("source size changed during indexing; retry the scan")
+            contents[item["path"]] = content
+            hashes[item["path"]] = hashlib.sha256(content).hexdigest()
+        # Go module metadata affects import resolution but has no source extension.
+        go_mod = root / "go.mod"
+        if not go_mod.is_symlink() and go_mod.is_file():
+            with go_mod.open("rb") as stream:
+                module_bytes = stream.read(min(max_file_bytes, 1024 ** 2) + 1)
+            if len(module_bytes) > min(max_file_bytes, 1024 ** 2) or inventory["source_bytes"] + len(module_bytes) > max_total_bytes:
+                raise ValueError("Go module metadata exceeds scan limits; no index was updated")
+            hashes["go.mod"] = hashlib.sha256(module_bytes).hexdigest()
+            contents["go.mod"] = module_bytes
+        return inventory, contents, hashes
+
+    @staticmethod
+    def _verify_snapshot(root, inventory, hashes, max_files, max_file_bytes):
+        source, _ = analyzer()
+        go_mod = root / "go.mod"
+        # The parser and hasher must have examined the same source bytes.
+        final_inventory = source.source_inventory(root, max_files, max_file_bytes)
+        if (final_inventory["truncated"] or final_inventory["skipped"].get("unreadable")
+                or final_inventory["skipped"].get("over_file_size_limit") or final_inventory["files"] != inventory["files"]):
+            raise ValueError("source file inventory changed during indexing; retry the scan")
+        if (not go_mod.is_symlink() and go_mod.is_file()) != ("go.mod" in hashes):
+            raise ValueError("Go module metadata changed during indexing; retry the scan")
+        for relative, digest in hashes.items():
+            path = root / relative
+            if path.is_symlink() or not path.resolve().is_relative_to(root):
+                raise ValueError("source paths changed during indexing; retry the scan")
+            with path.open("rb") as stream:
+                data = stream.read(max_file_bytes + 1)
+            if hashlib.sha256(data).hexdigest() != digest:
+                raise ValueError("source changed during indexing; retry the scan")

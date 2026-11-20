@@ -66,7 +66,7 @@ def _parser(grammar: str):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", FutureWarning)
             return _get_parser(grammar)
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return None
 
 
@@ -97,7 +97,7 @@ def parse_tree(language: str, source_path: str, text: str):
     try:
         tree = parser.parse(source)
         return tree, source, grammar
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return None
 
 
@@ -144,7 +144,7 @@ def parse_imports(language: str, source_path: str, text: str,
                     continue
             stack.extend(reversed(node.children))
         return imports, bool(root.has_error), root.type
-    except Exception:
+    except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         # Parsing a file must never prevent read-only heuristic analysis of the
         # rest of the project (malformed files and parser ABI mismatches included).
         return None

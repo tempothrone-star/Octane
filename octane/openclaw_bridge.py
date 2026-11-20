@@ -2,7 +2,7 @@
 
 The bridge deliberately exposes a fixed, audited operation set. It never runs
 project commands on the host; workspace commands are delegated to the existing
-Docker-only WorkspaceManager.
+configured container WorkspaceManager.
 """
 from __future__ import annotations
 
@@ -16,12 +16,12 @@ from typing import Any
 
 from .db import ProjectIntelligence
 from .exploration import ExplorationProfile, ExplorationScheduler, Tentacle
-from .workspace import WorkspaceManager
 from .scanner import ProjectScanner
 from .investigation import InvestigationWorkflow
-from .experiments import propose_patch
 from .focus import repair_focus
 from .repair import repair_triage
+from .reports import import_report
+from .provenance import statement
 
 _MAX_REQUEST_BYTES = 1_000_000
 _ALLOWED_EVIDENCE_STATUS = {"observed", "inferred", "unverified", "contradicted"}
@@ -47,21 +47,15 @@ _AGENT_ROLES = {
 }
 
 
-class BridgeError(ValueError):
-    """A safe, user-facing bridge validation error."""
+from .bridge_support import BridgeError as BridgeError, _CheckoutRequired, _is_within, _required
+from .bridge_workspace import WorkspaceOperations
 
 
-class _CheckoutRequired(BridgeError):
-    pass
-
-
-def _is_within(path: Path, root: Path) -> bool:
-    return path == root or root in path.parents
-
-
-class OctaneBridge:
+class OctaneBridge(WorkspaceOperations):
     def __init__(self, database: str, allowed_roots: list[str], workspace_root: str,
-                 allowed_images: list[str] | None = None, allow_agent_provisioning: bool = False):
+                 allowed_images: list[str] | None = None, allow_agent_provisioning: bool = False,
+                 allow_default_container_user: bool = False, language_servers: dict | None = None,
+                 container_engine: str = "docker", container_runtime: str | None = None):
         if not allowed_roots:
             raise BridgeError("Configure at least one allowedProjectRoots entry before using Octane")
         self.allowed_roots = []
@@ -75,6 +69,12 @@ class OctaneBridge:
         self.workspace_root = Path(workspace_root).expanduser().resolve()
         self.allowed_images = set(allowed_images or [])
         self.allow_agent_provisioning = bool(allow_agent_provisioning)
+        self.allow_default_container_user = allow_default_container_user
+        if language_servers is not None and not isinstance(language_servers, dict):
+            raise BridgeError("languageServers must map languages to explicit server commands")
+        self.language_servers = language_servers or {}
+        self.container_engine = container_engine
+        self.container_runtime = container_runtime
         self.runtime_context = ContextVar("runtime_context", default=None)
 
     def _check_root(self, value: str | Path) -> Path:
@@ -223,7 +223,7 @@ class OctaneBridge:
         except _CheckoutRequired as exc:
             return {"status": "checkout_required", "reason": str(exc)}
         path = _required(p, "path", str) if "path" in p else None
-        return repair_focus(root, path, p.get("query"), p.get("limit", 8))
+        return repair_focus(root, path, p.get("query"), p.get("limit", 8), self.language_servers)
 
     def _op_context(self, p: dict[str, Any]) -> dict[str, Any]:
         project_id = _required(p, "projectId", str)
@@ -319,10 +319,14 @@ class OctaneBridge:
             capabilities=preset["capabilities"], permissions=preset["permissions"],
         )
 
+    def _scan(self, project_id, **limits):
+        return ProjectScanner().scan(self.intelligence, project_id,
+                                     language_servers=self.language_servers, **limits)
+
     def _op_scan(self, p: dict[str, Any]) -> dict[str, Any]:
         project_id = _required(p, "projectId", str)
-        project = self._project(project_id)
-        return ProjectScanner().scan(self.intelligence, project_id, parser=p.get("parser", "auto"),
+        self._project(project_id)
+        return self._scan(project_id, parser=p.get("parser", "auto"),
                                      max_files=p.get("maxFiles", 100000),
                                      max_file_bytes=p.get("maxFileBytes", 5 * 1024 * 1024),
                                      max_total_bytes=p.get("maxTotalBytes", 100 * 1024 * 1024))
@@ -337,6 +341,19 @@ class OctaneBridge:
             requesting_agent_id=agent, revision=p.get("revision"),
             verification_status=p.get("verificationStatus"),
         )
+
+    def _op_evidence_import(self, p: dict[str, Any]) -> dict[str, Any]:
+        project_id = _required(p, "projectId", str)
+        self._project(project_id)
+        return import_report(self.intelligence, project_id, self._actor(project_id, "write_evidence"),
+                             _required(p, "reportPath", str), _required(p, "reportFormat", str))
+
+    def _op_evidence_attest(self, p: dict[str, Any]) -> dict[str, Any]:
+        project_id = _required(p, "projectId", str)
+        self._project(project_id)
+        actor = self._actor(project_id, "read_evidence")
+        self.intelligence.retrieve_evidence(_required(p, "evidenceId", str), requesting_agent_id=actor)
+        return statement(self.intelligence, project_id, p["evidenceId"])
 
     def _op_evidence_read(self, p: dict[str, Any]) -> dict[str, Any] | None:
         project_id = _required(p, "projectId", str)
@@ -372,7 +389,7 @@ class OctaneBridge:
     def _op_evidence_verify(self, p: dict[str, Any]) -> dict[str, bool]:
         project_id = _required(p, "projectId", str)
         self._project(project_id)
-        ProjectScanner().scan(self.intelligence, project_id, only_if_changed=True)
+        self._scan(project_id, only_if_changed=True)
         self.intelligence.mark_evidence_verified(
             _required(p, "evidenceId", str), _required(p, "verificationEvidenceId", str),
             self._actor(project_id, "verify_evidence"), require_recorded_run=True,
@@ -415,7 +432,7 @@ class OctaneBridge:
     def _op_investigation_create(self, p: dict[str, Any]) -> dict[str, Any]:
         project_id = _required(p, "projectId", str)
         self._project(project_id)
-        ProjectScanner().scan(self.intelligence, project_id, only_if_changed=True,
+        self._scan(project_id, only_if_changed=True,
                               max_file_bytes=p.get("maxFileBytes", 5 * 1024 * 1024),
                               max_total_bytes=p.get("maxTotalBytes", 100 * 1024 * 1024))
         return self.intelligence.create_investigation(
@@ -457,7 +474,7 @@ class OctaneBridge:
     def _op_investigation_resume(self, p: dict[str, Any]) -> dict[str, Any]:
         project_id = _required(p, "projectId", str)
         self._project(project_id)
-        ProjectScanner().scan(self.intelligence, project_id, only_if_changed=True)
+        self._scan(project_id, only_if_changed=True)
         return self.intelligence.resume_investigation(
             _required(p, "investigationId", str), self._actor(project_id, "checkpoint_investigation")
         )
@@ -465,7 +482,7 @@ class OctaneBridge:
     def _op_investigation_explore(self, p: dict[str, Any]) -> dict[str, Any]:
         project_id = _required(p, "projectId", str)
         self._project(project_id)
-        ProjectScanner().scan(self.intelligence, project_id, only_if_changed=True)
+        self._scan(project_id, only_if_changed=True)
         return InvestigationWorkflow(self.intelligence).explore(
             project_id, _required(p, "investigationId", str), self._actor(project_id, "workflow"),
             exploration_id=p.get("explorationId"), starting_nodes=p.get("startingNodes"),
@@ -476,7 +493,7 @@ class OctaneBridge:
     def _op_investigation_revalidate(self, p: dict[str, Any]) -> dict[str, Any]:
         project_id = _required(p, "projectId", str)
         self._project(project_id)
-        ProjectScanner().scan(self.intelligence, project_id, only_if_changed=True)
+        self._scan(project_id, only_if_changed=True)
         return InvestigationWorkflow(self.intelligence).revalidate(
             project_id, _required(p, "investigationId", str), self._actor(project_id, "workflow"),
             _required(p, "evidenceIds", list), _required(p, "rationale", str))
@@ -635,86 +652,6 @@ class OctaneBridge:
         )
         return {"attached": True}
 
-    def _op_workspace_create(self, p: dict[str, Any]) -> dict[str, Any]:
-        project_id = _required(p, "projectId", str)
-        self._project(project_id)
-        ProjectScanner().scan(self.intelligence, project_id, only_if_changed=True,
-                              max_file_bytes=p.get("maxFileBytes", 5 * 1024 * 1024),
-                              max_total_bytes=p.get("maxTotalBytes", 100 * 1024 * 1024))
-        return WorkspaceManager(self.intelligence, self.workspace_root).create_workspace(
-            project_id, p.get("mode", "observation")
-        )
-
-    def _workspace(self, workspace_id: str) -> tuple[WorkspaceManager, str]:
-        with self.intelligence._session() as db:
-            row = db.execute("SELECT project_id FROM workspaces WHERE id=?", (workspace_id,)).fetchone()
-        if row is None:
-            raise KeyError(f"unknown workspace: {workspace_id}")
-        project_id = row["project_id"]
-        self._project(project_id)
-        return WorkspaceManager(self.intelligence, self.workspace_root), project_id
-
-    def _op_workspace_patch(self, p: dict[str, Any]) -> dict[str, bool]:
-        manager, _ = self._workspace(_required(p, "workspaceId", str))
-        manager.apply_candidate_patch(
-            p["workspaceId"], _required(p, "relativePath", str), _required(p, "content", str)
-        )
-        return {"patched": True}
-
-    def _op_workspace_compare(self, p: dict[str, Any]) -> dict[str, Any]:
-        manager, _ = self._workspace(_required(p, "workspaceId", str))
-        return manager.compare_workspace(p["workspaceId"])
-
-    def _op_workspace_run(self, p: dict[str, Any]) -> dict[str, Any]:
-        manager, project_id = self._workspace(_required(p, "workspaceId", str))
-        investigation_id = p.get("investigationId")
-        if investigation_id is not None:
-            investigation = self.intelligence.retrieve_investigation(investigation_id)
-            if not investigation or investigation["project_id"] != project_id:
-                raise BridgeError("investigation must belong to the workspace project")
-        mode = p.get("mode", "observation")
-        command = _required(p, "command", list)
-        image = _required(p, "image", str)
-        if image not in self.allowed_images:
-            raise PermissionError("Docker image is not in the operator-configured allowedDockerImages list")
-        timeout = p.get("timeoutSeconds", 30)
-        if type(timeout) is not int or not 1 <= timeout <= 300:
-            raise BridgeError("timeoutSeconds must be an integer from 1 to 300")
-        python_trace = p.get("pythonTrace", False)
-        if type(python_trace) is not bool:
-            raise BridgeError("pythonTrace must be a boolean")
-        native_symbols = _required(p, "nativeTraceSymbols", list) if "nativeTraceSymbols" in p else None
-        runtime_trace = _required(p, "runtimeTrace", str) if "runtimeTrace" in p else None
-        if mode == "observation":
-            return manager.run_observation(p["workspaceId"], command, image, timeout,
-                                           investigation_id=investigation_id, python_trace=python_trace,
-                                           native_trace_symbols=native_symbols, runtime_trace=runtime_trace)
-        if mode == "experimentation":
-            return manager.run_experiment(p["workspaceId"], command, image, timeout,
-                                          investigation_id=investigation_id, python_trace=python_trace,
-                                          native_trace_symbols=native_symbols, runtime_trace=runtime_trace)
-        raise BridgeError("mode must be observation or experimentation")
-
-    def _op_workspace_propose(self, p: dict[str, Any]) -> dict[str, Any]:
-        manager, project_id = self._workspace(_required(p, "workspaceId", str))
-        return propose_patch(manager, project_id, _required(p, "investigationId", str), p["workspaceId"],
-                             _required(p, "baselineRunId", str), _required(p, "candidateRunId", str),
-                             _required(p, "regressionRunIds", list), _required(p, "rationale", str),
-                             _required(p, "evidenceIds", list), self._actor(project_id, "workflow"),
-                             strict_preservation_output=p.get("strictPreservationOutput", False))
-
-    def _op_workspace_destroy(self, p: dict[str, Any]) -> dict[str, bool]:
-        manager, _ = self._workspace(_required(p, "workspaceId", str))
-        manager.destroy_workspace(p["workspaceId"])
-        return {"destroyed": True}
-
-
-def _required(params: dict[str, Any], key: str, expected: type) -> Any:
-    value = params.get(key)
-    if not isinstance(value, expected) or (expected is int and type(value) is not int):
-        raise BridgeError(f"{key} must be {expected.__name__}")
-    return value
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -723,6 +660,10 @@ def main() -> None:
     parser.add_argument("--workspace-root", required=True)
     parser.add_argument("--allowed-image", action="append", default=[])
     parser.add_argument("--allow-agent-provisioning", action="store_true")
+    parser.add_argument("--allow-default-container-user", action="store_true")
+    parser.add_argument("--language-servers", default="{}")
+    parser.add_argument("--container-engine", choices=("docker", "podman"), default="docker")
+    parser.add_argument("--container-runtime", choices=("runsc",))
     args = parser.parse_args()
     raw = sys.stdin.buffer.read(_MAX_REQUEST_BYTES + 1)
     if len(raw) > _MAX_REQUEST_BYTES:
@@ -731,7 +672,9 @@ def main() -> None:
         try:
             request = json.loads(raw.decode("utf-8"))
             result = OctaneBridge(args.database, args.allowed_root, args.workspace_root,
-                                   args.allowed_image, args.allow_agent_provisioning).dispatch(request)
+                                   args.allowed_image, args.allow_agent_provisioning,
+                                   args.allow_default_container_user, json.loads(args.language_servers),
+                                   args.container_engine, args.container_runtime).dispatch(request)
             response = {"ok": True, "result": result}
         except Exception as exc:
             response = {"ok": False, "error": {"type": type(exc).__name__, "message": str(exc)}}

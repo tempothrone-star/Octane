@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 try:
     import tree_sitter_languages  # noqa: F401
 except ImportError:
-    raise unittest.SkipTest("optional Tree-sitter extra is not installed")
+    raise unittest.SkipTest("optional Tree-sitter extra is not installed") from None
 
 from octane.ledger import ast_backend  # noqa: E402
 from octane.ledger.polygraph import build_dependency_graph  # noqa: E402

@@ -413,7 +413,7 @@ class OpenClawBridgeTests(unittest.TestCase):
     def test_openclaw_manifest_and_skill_contract_match_tools(self):
         root = Path(__file__).resolve().parents[1]
         manifest = json.loads((root / "openclaw.plugin.json").read_text(encoding="utf-8"))
-        entry = (root / "openclaw" / "index.js").read_text(encoding="utf-8")
+        entry = (root / "openclaw" / "tools.js").read_text(encoding="utf-8")
         tools = manifest["contracts"]["tools"]
         self.assertEqual(len(tools), 12)
         self.assertEqual(manifest["skills"], ["."])

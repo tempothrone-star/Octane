@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
+from ..storage import prepare_database, private_directory
+
 PACKAGE_ROOT = Path(__file__).resolve().parent
 MIGRATIONS = PACKAGE_ROOT / "migrations"
 ZERO_HASH = "0" * 64
@@ -99,7 +101,9 @@ def _atomic_json(path: Path, data: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
     try:
-        temporary.write_text(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(data, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
         os.replace(str(temporary), str(path))
     finally:
         try:
@@ -207,7 +211,7 @@ def _filesystem_type(path: Path) -> Optional[str]:
 class Ledger:
     def __init__(self, db_path: Path):
         self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        prepare_database(self.db_path)
         self.fts5 = False
         self._migrate()
 
@@ -477,7 +481,7 @@ def init_project(root: Path, update_gitignore: bool = False, trust_tier: str = "
     if not root.is_dir():
         raise OctaneError("project root is not a directory", 2, "invalid_input")
     state, database = ledger_location(root)
-    state.mkdir(parents=True, exist_ok=True)
+    private_directory(state, tighten_existing=True)
     ledger = Ledger(database)
     existing = ledger.project_record()
     if existing:
@@ -489,7 +493,7 @@ def init_project(root: Path, update_gitignore: bool = False, trust_tier: str = "
             try:
                 metadata = _read_json_object(metadata_path)
             except (OSError, ValueError) as error:
-                raise OctaneError("project.json is unreadable: " + str(error))
+                raise OctaneError("project.json is unreadable: " + str(error)) from error
             if metadata.get("project_id") != project_id or metadata.get("root") != str(root):
                 raise OctaneError("project.json project_id/root does not match database", 1, "project_mismatch")
     else:
@@ -551,7 +555,7 @@ class Project:
             if not _valid_config(self.config):
                 raise ValueError("config.json requires schema 1, a low/standard trust tier, and an execution_allowlist array")
         except (OSError, ValueError) as error:
-            raise OctaneError("project metadata/config is missing or invalid: " + str(error))
+            raise OctaneError("project metadata/config is missing or invalid: " + str(error)) from error
         if self.metadata.get("root") != str(self.root):
             raise OctaneError("project moved or renamed: stored root does not match current path", 1, "project_mismatch")
         self.project_id = self.metadata.get("project_id")
@@ -622,7 +626,7 @@ class Project:
             result = dict(result); result.pop("permissions_json", None)
             return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctaneError("agent name already exists: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("agent name already exists: " + str(error), 2, "invalid_input") from error
         except Exception:
             conn.rollback(); raise
         finally:
@@ -682,7 +686,7 @@ class Project:
             result = dict(result); result["payload"] = json.loads(result.pop("payload_json"))
             return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctaneError("evidence write rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("evidence write rejected: " + str(error), 2, "invalid_input") from error
         except Exception:
             conn.rollback(); raise
         finally:
@@ -726,7 +730,7 @@ class Project:
             conn.commit(); self.refresh_anchor()
             return self._claim_record(result)
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctaneError("claim write rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("claim write rejected: " + str(error), 2, "invalid_input") from error
         except Exception:
             conn.rollback(); raise
         finally:
@@ -785,7 +789,7 @@ class Project:
             self.refresh_anchor()
             return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctaneError("claim transition rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("claim transition rejected: " + str(error), 2, "invalid_input") from error
         except Exception:
             conn.rollback(); raise
         finally:
@@ -821,7 +825,7 @@ class Project:
             result = self.ledger.event(conn, self.project_id, actor_id, op, request, build, apply, explicit_key)
             conn.commit(); self.refresh_anchor(); return result
         except sqlite3.IntegrityError as error:
-            conn.rollback(); raise OctaneError("link write rejected: " + str(error), 2, "invalid_input")
+            conn.rollback(); raise OctaneError("link write rejected: " + str(error), 2, "invalid_input") from error
         except Exception:
             conn.rollback(); raise
         finally:

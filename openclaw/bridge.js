@@ -9,7 +9,11 @@ const MAX_RESPONSE_BYTES = 8_000_000;
 const DEFAULT_BRIDGE_TIMEOUT_MS = 120_000;
 
 export function bridgeTimeoutFor(operation, params) {
-  return operation === "workspace_run" && Number.isInteger(params?.timeoutSeconds)
+  const bounded = (value, fallback, max) => Number.isInteger(value) ? Math.min(max, Math.max(1, value)) : fallback;
+  if (operation === "workspace_mutate") return bounded(params?.mutationLimit, 5, 20) * 40_000 + 10_000;
+  if (operation === "workspace_bisect") return bounded(params?.bisectBudget, 20, 100) * 70_000 + 10_000;
+  if (operation === "workspace_evaluate") return bounded(params?.caseLimit, 5, 100) * 280_000 + 10_000;
+  return (operation === "workspace_run" || operation === "workspace_property") && Number.isInteger(params?.timeoutSeconds)
     ? Math.min(300, Math.max(1, params.timeoutSeconds)) * 1000 + 10_000
     : DEFAULT_BRIDGE_TIMEOUT_MS;
 }
@@ -35,11 +39,17 @@ function resolveConfig(config) {
   if (config.allowAgentProvisioning !== undefined && typeof config.allowAgentProvisioning !== "boolean") {
     throw new Error("allowAgentProvisioning must be a boolean.");
   }
+  if (config.allowDefaultContainerUser !== undefined && typeof config.allowDefaultContainerUser !== "boolean") {
+    throw new Error("allowDefaultContainerUser must be a boolean.");
+  }
   const python = typeof config.pythonExecutable === "string" && config.pythonExecutable.trim()
     ? config.pythonExecutable
     : process.platform === "win32" ? "python" : "python3";
   return { allowedRoots, databasePath, workspaceRoot, allowedImages: [...new Set(allowedImages)],
-    allowAgentProvisioning: config.allowAgentProvisioning === true, python };
+    allowAgentProvisioning: config.allowAgentProvisioning === true,
+    allowDefaultContainerUser: config.allowDefaultContainerUser === true,
+    languageServers: config.languageServers || {},
+    containerEngine: config.containerEngine || "docker", containerRuntime: config.containerRuntime, python };
 }
 
 export function callBridge(config, operation, params, context = {}) {
@@ -56,6 +66,10 @@ export function callBridge(config, operation, params, context = {}) {
   for (const root of resolved.allowedRoots) args.push("--allowed-root", root);
   for (const image of resolved.allowedImages) args.push("--allowed-image", image);
   if (resolved.allowAgentProvisioning) args.push("--allow-agent-provisioning");
+  if (resolved.allowDefaultContainerUser) args.push("--allow-default-container-user");
+  args.push("--language-servers", JSON.stringify(resolved.languageServers));
+  args.push("--container-engine", resolved.containerEngine);
+  if (resolved.containerRuntime) args.push("--container-runtime", resolved.containerRuntime);
   const priorPath = process.env.PYTHONPATH;
   const pythonPath = [PLUGIN_ROOT, priorPath].filter(Boolean).join(delimiter);
 

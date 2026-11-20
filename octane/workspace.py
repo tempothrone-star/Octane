@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import difflib
+import csv
 import hashlib
 import json
+import io
 import os
 import re
 import shutil
@@ -21,21 +23,35 @@ from .db import ProjectIntelligence, _id, _scrub_sensitive_value
 from .call_plot import call_plot
 from .native_trace import load_native_trace, native_trace_command
 from .runtime_profiles import load_profile_trace, profile_command
+from .storage import private_directory
+from .test_protection import baseline_tests
+from .reports import FORMATS, MAX_REPORT_BYTES, parse_report
 
 
 class WorkspaceManager:
-    def __init__(self, intelligence: ProjectIntelligence, storage_root: str | Path | None = None):
+    def __init__(self, intelligence: ProjectIntelligence, storage_root: str | Path | None = None,
+                 *, allow_default_container_user: bool = False, container_engine: str = "docker",
+                 container_runtime: str | None = None):
+        if type(allow_default_container_user) is not bool:
+            raise ValueError("allowDefaultContainerUser must be a boolean")
+        if container_engine not in {"docker", "podman"} or container_runtime not in {None, "runsc"}:
+            raise ValueError("containerEngine must be docker or podman and containerRuntime may be runsc")
         self.intelligence = intelligence
+        self.allow_default_container_user = allow_default_container_user
+        self.container_engine = container_engine
+        self.container_runtime = container_runtime
         self.storage_root = (Path(storage_root) if storage_root else Path(tempfile.gettempdir()) / "octane-workspaces").resolve()
-        self.storage_root.mkdir(parents=True, exist_ok=True)
+        private_directory(self.storage_root, tighten_existing=True)
 
-    def create_workspace(self, project_id: str, mode: str = "observation") -> dict[str, Any]:
+    def create_workspace(self, project_id: str, mode: str = "observation", *, source_root: Path | None = None,
+                         source_revision: str | None = None) -> dict[str, Any]:
         if mode not in {"observation", "experimentation"}:
             raise ValueError("mode must be observation or experimentation")
         project = self.intelligence.get_project(project_id)
         if not project:
             raise KeyError(project_id)
-        source, workspace_id = Path(project["root"]), "WS-" + uuid.uuid4().hex
+        source = source_root.resolve() if source_root is not None else Path(project["root"])
+        workspace_id = "WS-" + uuid.uuid4().hex
         if not source.is_dir():
             raise FileNotFoundError(source)
         if source == self.storage_root or source.is_relative_to(self.storage_root) or self.storage_root.is_relative_to(source):
@@ -44,7 +60,7 @@ class WorkspaceManager:
             raise ValueError("store the native PIL database outside the project before creating snapshots")
         target = self.storage_root / workspace_id
         baseline = self.storage_root / ".baselines" / workspace_id
-        baseline.parent.mkdir(parents=True, exist_ok=True)
+        private_directory(baseline.parent, tighten_existing=True)
         try:
             source_hash = _tree_hash(source)
             shutil.copytree(source, target, ignore=_copy_ignore, symlinks=False)
@@ -52,8 +68,9 @@ class WorkspaceManager:
                 raise RuntimeError("project changed during snapshot creation; retry")
             shutil.copytree(target, baseline, ignore=_copy_ignore, symlinks=False)
             with self.intelligence._transaction() as db:
-                db.execute("INSERT INTO workspaces(id,project_id,path,mode,base_revision,created_at,status,baseline_path,snapshot_hash) VALUES(?,?,?,?,?,?,?,?,?)",
-                           (workspace_id, project_id, str(target), mode, project["revision"], _now(), "active", str(baseline), source_hash))
+                db.execute("INSERT INTO workspaces(id,project_id,path,mode,base_revision,created_at,status,baseline_path,snapshot_hash,source_revision) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           (workspace_id, project_id, str(target), mode, project["revision"], _now(), "active", str(baseline), source_hash,
+                            source_revision or project["revision"]))
                 self.intelligence._audit(db, project_id, None, "workspace.create", "workspace", workspace_id,
                                          {"mode": mode, "snapshot_hash": source_hash})
         except Exception:
@@ -63,7 +80,8 @@ class WorkspaceManager:
                 shutil.rmtree(baseline)
             raise
         return {"id": workspace_id, "project_id": project_id, "path": str(target), "mode": mode,
-                "base_revision": project["revision"], "snapshot_hash": source_hash, "status": "active"}
+                "base_revision": project["revision"], "source_revision": source_revision or project["revision"],
+                "snapshot_hash": source_hash, "status": "active"}
 
     def apply_candidate_patch(self, workspace_id: str, relative_path: str, content: str) -> None:
         workspace = self._get(workspace_id)
@@ -76,24 +94,26 @@ class WorkspaceManager:
 
     def run_observation(self, workspace_id: str, command: list[str], image: str, timeout_seconds: int = 30,
                         *, investigation_id: str | None = None, python_trace: bool = False,
-                        native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None) -> dict[str, Any]:
+                        native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
+                        report_format: str | None = None) -> dict[str, Any]:
         """Run an explicit command in Docker, never as a host subprocess."""
         workspace = self._get(workspace_id)
         if workspace["mode"] != "observation":
             raise PermissionError("observation execution requires observation mode")
         return self._docker_run(workspace, command, image, timeout_seconds, writable=False,
                                 investigation_id=investigation_id, python_trace=python_trace,
-                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace)
+                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace, report_format=report_format)
 
     def run_experiment(self, workspace_id: str, command: list[str], image: str, timeout_seconds: int = 30,
                        *, investigation_id: str | None = None, python_trace: bool = False,
-                       native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None) -> dict[str, Any]:
+                       native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
+                       report_format: str | None = None) -> dict[str, Any]:
         workspace = self._get(workspace_id)
         if workspace["mode"] != "experimentation":
             raise PermissionError("experiments require experimentation mode")
         return self._docker_run(workspace, command, image, timeout_seconds, writable=True,
                                 investigation_id=investigation_id, python_trace=python_trace,
-                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace)
+                                native_trace_symbols=native_trace_symbols, runtime_trace=runtime_trace, report_format=report_format)
 
     def compare_workspace(self, workspace_id: str) -> dict[str, Any]:
         workspace = self._get(workspace_id)
@@ -150,45 +170,29 @@ class WorkspaceManager:
 
     def _docker_run(self, workspace: dict[str, Any], command: list[str], image: str, timeout: int, writable: bool,
                     investigation_id: str | None, python_trace: bool,
-                    native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None) -> dict[str, Any]:
-        if not command or not all(isinstance(part, str) and "\x00" not in part for part in command):
-            raise ValueError("command must be a non-empty list of strings")
-        if _scrub_sensitive_value(" ".join(command)) != " ".join(command):
-            raise ValueError("commands must not contain credentials")
-        if not image or image.startswith("-") or any(ch.isspace() for ch in image):
-            raise ValueError("image must be a Docker image reference")
-        if not 1 <= timeout <= 3600:
-            raise ValueError("timeout_seconds must be between 1 and 3600")
-        if sum((python_trace, native_trace_symbols is not None, runtime_trace is not None)) > 1:
-            raise ValueError("choose one of pythonTrace, nativeTraceSymbols, or runtimeTrace")
-        traced_command, runner = None, None
-        if python_trace:
-            traced_command = _python_trace_command(command)
-            runner = ("trace_runner.py", "/octane-tracer.py")
-        elif native_trace_symbols is not None:
-            traced_command = native_trace_command(command, native_trace_symbols)
-            runner = ("native_trace_runner.py", "/octane-tracer.py")
-        elif runtime_trace is not None:
-            traced_command, runner_name = profile_command(command, runtime_trace)
-            if runner_name:
-                runner = (runner_name, "/" + runner_name)
-        docker = shutil.which("docker")
-        if docker is None:
-            raise RuntimeError("Docker is required for execution; no host execution fallback is permitted")
+                    native_trace_symbols: list[str] | None = None, runtime_trace: str | None = None,
+                    report_format: str | None = None) -> dict[str, Any]:
+        traced_command, runner = self._execution_options(command, image, timeout, python_trace,
+                                                          native_trace_symbols, runtime_trace, report_format)
+        docker = self._execution_engine()
+        container_user = self._container_user()
+        baseline = Path(workspace["baseline_path"])
+        if _tree_hash(baseline) != workspace["snapshot_hash"]:
+            raise RuntimeError("workspace baseline contents changed")
+        test_integrity, test_mounts = baseline_tests(baseline)
         mount_mode = "rw" if writable else "ro"
         cid_fd, cid_name = tempfile.mkstemp(prefix=".octane-cid-", dir=self.storage_root)
         os.close(cid_fd)
         os.unlink(cid_name)
-        image_id = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", image],
-                                  capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        try:
+            image_id = subprocess.run([docker, "image", "inspect", "--format", "{{.Id}}", image],
+                                      capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError("Container engine could not inspect the selected image; pull the approved image first") from exc
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
-            raise RuntimeError("Docker did not return an immutable local image ID; pull the approved image first")
-        args = [docker, "run", "--rm", "--cidfile", cid_name, "--stop-timeout=1", "--network=none", "--memory=512m",
-                "--memory-swap=512m", "--cpus=1", "--pids-limit=128", "--cap-drop=ALL", "--security-opt=no-new-privileges",
-                "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "-v", f"{workspace['path']}:/workspace:{mount_mode}",
-                "-w", "/workspace", "-e", "HOME=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1"]
-        if hasattr(os, "getuid"):
-            args += ["--user", f"{os.getuid()}:{os.getgid()}"]
+            raise RuntimeError("Container engine did not return an immutable local image ID; pull the approved image first")
+        args = self._container_arguments(docker, workspace, cid_name, mount_mode, container_user,
+                                         writable, baseline, test_mounts)
         buffers = {"stdout": bytearray(), "stderr": bytearray()}
         truncated = {"stdout": False, "stderr": False}
         max_output = 1_000_000
@@ -210,7 +214,12 @@ class WorkspaceManager:
                         before_hash, workspace.get("snapshot_hash") or before_hash, "running", "{}", _now()))
         trace_result = None
         trace_file = None
+        report_file, report, report_error = None, None, None
         try:
+            if report_format is not None:
+                descriptor, report_file = tempfile.mkstemp(prefix=".octane-report-", dir=self.storage_root)
+                os.close(descriptor)
+                args += ["-v", f"{report_file}:/octane-report-output:rw", "-e", "OCTANE_REPORT_PATH=/octane-report-output"]
             if traced_command:
                 trace_fd, trace_file = tempfile.mkstemp(prefix=".octane-trace-", dir=self.storage_root)
                 os.close(trace_fd)
@@ -251,6 +260,14 @@ class WorkspaceManager:
                 process.stdout.close()
                 process.stderr.close()
             Path(cid_name).unlink(missing_ok=True)
+            if report_file is not None:
+                try:
+                    with Path(report_file).open("rb") as stream:
+                        report = parse_report(stream.read(MAX_REPORT_BYTES + 1), report_format, Path(workspace["path"]))
+                except (OSError, ValueError) as exc:
+                    report_error = str(exc)
+                finally:
+                    Path(report_file).unlink(missing_ok=True)
             if trace_file:
                 try:
                     if process and not timed_out:
@@ -267,6 +284,10 @@ class WorkspaceManager:
                   "network": "disabled", "workspace_mode": workspace["mode"], "timed_out": timed_out,
                   "output_truncated": truncated["stdout"] or truncated["stderr"], "cleanup_warning": cleanup_warning,
                   "image_id": image_id, "before_hash": before_hash, "after_hash": _tree_hash(Path(workspace["path"])),
+                  "test_integrity": test_integrity, "container_user": container_user or "image-default",
+                  "container_engine": self.container_engine, "container_runtime": self.container_runtime or "engine-default",
+                  "allow_default_container_user": self.allow_default_container_user,
+                  "source_revision": workspace.get("source_revision") or workspace["base_revision"],
                   "duration_seconds": round(time.monotonic() - started, 6)}
         if python_trace:
             output["python_trace"] = trace_result or {"available": False, "reason": "trace did not complete or could not be read"}
@@ -276,6 +297,8 @@ class WorkspaceManager:
         if runtime_trace is not None:
             output["runtime_trace"] = trace_result or {"available": False, "format": runtime_trace,
                                                         "reason": "Runtime profile did not complete or could not be read"}
+        if report_format is not None:
+            output.update(report_format=report_format, report=report, report_error=report_error)
         runtime_agent = self.intelligence.get_or_register_agent(workspace["project_id"], "docker-runtime", "runtime observer",
                                                                 ["docker-isolated-execution"], ["write_evidence"])
         with self.intelligence._transaction() as db:
@@ -297,6 +320,72 @@ class WorkspaceManager:
             self.intelligence._audit(db, workspace["project_id"], runtime_agent["id"], "workspace.run", "execution", run_id,
                                      {"status": status, "evidence_id": evidence["id"]})
         return _scrub_sensitive_value(output)
+
+    @staticmethod
+    def _execution_options(command, image, timeout, python_trace, native_trace_symbols, runtime_trace, report_format):
+        if not command or not all(isinstance(part, str) and "\x00" not in part for part in command):
+            raise ValueError("command must be a non-empty list of strings")
+        if _scrub_sensitive_value(" ".join(command)) != " ".join(command):
+            raise ValueError("commands must not contain credentials")
+        if not image or image.startswith("-") or any(ch.isspace() for ch in image):
+            raise ValueError("image must be a Docker image reference")
+        if not 1 <= timeout <= 3600:
+            raise ValueError("timeout_seconds must be between 1 and 3600")
+        if sum((python_trace, native_trace_symbols is not None, runtime_trace is not None)) > 1:
+            raise ValueError("choose one of pythonTrace, nativeTraceSymbols, or runtimeTrace")
+        if report_format is not None and report_format not in FORMATS:
+            raise ValueError("unsupported report format")
+        traced_command, runner = None, None
+        if python_trace:
+            traced_command = _python_trace_command(command)
+            runner = ("trace_runner.py", "/octane-tracer.py")
+        elif native_trace_symbols is not None:
+            traced_command = native_trace_command(command, native_trace_symbols)
+            runner = ("native_trace_runner.py", "/octane-tracer.py")
+        elif runtime_trace is not None:
+            traced_command, runner_name = profile_command(command, runtime_trace)
+            if runner_name:
+                runner = (runner_name, "/" + runner_name)
+        return traced_command, runner
+
+    def _execution_engine(self):
+        docker = shutil.which(self.container_engine)
+        if docker is None:
+            raise RuntimeError(self.container_engine.capitalize() + " is required for execution; no host execution fallback is permitted")
+        if self.container_engine == "podman":
+            information = subprocess.run([docker, "info", "--format", "json"], capture_output=True, text=True,
+                                         timeout=10, check=True)
+            if json.loads(information.stdout).get("host", {}).get("security", {}).get("rootless") is not True:
+                raise RuntimeError("the Podman backend requires a rootless engine")
+        return docker
+
+    def _container_arguments(self, docker, workspace, cid_name, mount_mode, container_user, writable, baseline, test_mounts):
+        args = [docker, "run", "--rm", "--cidfile", cid_name, "--stop-timeout=1", "--network=none", "--memory=512m",
+                "--memory-swap=512m", "--cpus=1", "--pids-limit=128", "--cap-drop=ALL", "--security-opt=no-new-privileges",
+                "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m", "-v", f"{workspace['path']}:/workspace:{mount_mode}",
+                "-w", "/workspace", "-e", "HOME=/tmp", "-e", "PYTHONDONTWRITEBYTECODE=1"]
+        if self.container_engine == "podman":
+            args += ["--userns=keep-id"]
+        if container_user is not None:
+            args += ["--user", container_user]
+        if self.container_runtime is not None:
+            args += ["--runtime", self.container_runtime]
+        if writable:
+            for relative in test_mounts:
+                mount = io.StringIO()
+                csv.writer(mount, lineterminator="").writerow([
+                    "type=bind", "source=" + str(baseline / relative),
+                    "target=/workspace/" + relative, "readonly",
+                ])
+                args += ["--mount", mount.getvalue()]
+        return args
+
+    def _container_user(self) -> str | None:
+        if hasattr(os, "getuid") and hasattr(os, "getgid"):
+            return f"{os.getuid()}:{os.getgid()}"
+        if not self.allow_default_container_user:
+            raise RuntimeError("cannot map a container user on this platform; an operator must set allowDefaultContainerUser to accept the image default")
+        return None
 
     def _get(self, workspace_id: str) -> dict[str, Any]:
         with self.intelligence._session() as db:
@@ -418,11 +507,21 @@ def _valid_trace_symbol(value: Any) -> bool:
             and type(value["definition_line"]) is int and value["definition_line"] >= 0)
 
 
+_SECRET_NAMES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".npmrc", ".netrc", ".pypirc",
+                 ".git-credentials", "credentials.json", "service-account.json", "secrets.json", "secrets.yml", "secrets.yaml"}
+_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx")
+_SECRET_DIRS = {".ssh", ".aws", ".gnupg", ".docker", ".kube"}
+
+
+def excluded_name(name: str) -> bool:
+    excluded = {".git", ".venv", "venv", "node_modules", "__pycache__", ".tox", ".octane", ".octance"} | _SECRET_DIRS
+    value = name.casefold()
+    return value in excluded or value.startswith(".env") or value.endswith((".env", *_SECRET_SUFFIXES)) or value in _SECRET_NAMES
+
+
 def _copy_ignore(directory: str, names: list[str]) -> set[str]:
-    excluded = {".git", ".venv", "venv", "node_modules", "__pycache__", ".tox", ".octane", ".octance", ".ssh", ".aws"}
     base = Path(directory)
-    return {name for name in names if name in excluded or name.startswith(".env") or name.endswith(".env")
-            or name in {"id_rsa", "id_ed25519", ".npmrc", ".netrc", ".pypirc"} or (base / name).is_symlink()
+    return {name for name in names if excluded_name(name) or (base / name).is_symlink()
             or not (base / name).is_dir() and not (base / name).is_file()}
 
 

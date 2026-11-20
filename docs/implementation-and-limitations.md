@@ -2,7 +2,7 @@
 
 ## Local evidence and static analysis
 
-The Octane package includes a Python 3.9+ standard-library CLI under `octane/ledger/`. It records evidence and claims in a project-local SQLite ledger, quarantines low-trust claims, verifies an anchored SHA-256 event chain, and compares materialized state with event replay. Evidence stays `unverified` in this ledger. Run checks with the host's authorized tools and record the observation with its source and revision. See the [portable command reference](../SKILL.md).
+The Octane package includes a checkout-only Python 3.9+ standard-library CLI (pip installation requires Python 3.11+) under `octane/ledger/`. It records evidence and claims in a project-local SQLite ledger, quarantines low-trust claims, verifies an anchored SHA-256 event chain, and compares materialized state with event replay. Evidence stays `unverified` in this ledger. Run checks with the host's authorized tools and record the observation with its source and revision. See the [portable command reference](../SKILL.md).
 
 | Command | What it reports |
 | --- | --- |
@@ -20,7 +20,7 @@ The OpenClaw plugin adds checkout triage, candidate function relationships, runt
 - Static edges describe potential calls or imports. Resolve ambiguity from source and test execution. Dynamic dispatch, overloads, and cross-language calls can leave gaps.
 - Runtime traces observe the selected command and supported process. Sampling may miss short calls. A passing test establishes the behavior its assertions checked.
 - Patch proposals require current intent evidence, a matched failing-to-passing reproduction, and passing checks for preserved behavior. Proposals cover text edits to existing files. Review the diff and test coverage before applying it to the requested checkout.
-- Docker experiments require an eligible local image with the needed tools and dependencies. Container networking is disabled. OpenClaw tool policy and allowed checkout roots govern access.
+- Docker or configured rootless Podman experiments require an eligible local image with the needed tools and dependencies. Container networking is disabled. OpenClaw tool policy and allowed checkout roots govern access.
 
 ## Portable localization benchmark
 
@@ -41,3 +41,9 @@ The labels and traces were authored with the fixtures. These scores apply to the
 ## Validation
 
 See the [project review](project-review.md) for regression coverage and GitHub Actions results. The [native Docker demonstration](openclaw.md#reproduce-the-native-demonstration) exercises a failing reproduction, an overbroad patch that breaks documented behavior, and a smaller candidate that passes both checks.
+
+## Integration verification boundaries
+
+The full integration roadmap is implemented as optional, explicit adapters. The [integration guide](integrations.md) distinguishes live validation from mocked transport tests. Semantic Python/TypeScript imports, MCP stdio calls, offline Ed25519 signatures, Docker report capture, mutation reversion, bisect, and property probes have executable regression checks. Podman and gVisor policy/argument tests run without those backends; live deployment checks remain necessary. GitHub write transport is tested without sending third-party comments. No hosted remote sandbox, live telemetry subscription, full-language semantic analysis, or autonomous SWE-bench solver is claimed.
+
+The [public Blinker replay](evaluation.md) exercises one historical maintainer patch with authored reproduction and preservation probes. It validates execution/evaluation mechanics and provides no general repair accuracy estimate. Imported reports are unverified; runtime reports bind to their recorded run. A mutation score is bounded to selected operators. Signed statements prove the trusted key signed the recorded claim, not that its semantic conclusions were correct.

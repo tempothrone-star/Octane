@@ -12,6 +12,9 @@ test("workspace execution timeout includes the requested runtime and cleanup", (
   assert.equal(bridgeTimeoutFor("workspace_run", { timeoutSeconds: 30 }), 40_000);
   assert.equal(bridgeTimeoutFor("workspace_run", { timeoutSeconds: 999 }), 310_000);
   assert.equal(bridgeTimeoutFor("project_list", {}), 120_000);
+  assert.equal(bridgeTimeoutFor("workspace_mutate", {mutationLimit: 20}), 810_000);
+  assert.equal(bridgeTimeoutFor("workspace_bisect", {bisectBudget: 2}), 150_000);
+  assert.equal(bridgeTimeoutFor("workspace_evaluate", {caseLimit: 1}), 290_000);
   assert.equal(bridgeTimeoutFor("workspace_run", {}), 120_000);
 });
 
@@ -48,7 +51,7 @@ test("npm package contains both runtimes, skill migrations, and linked documenta
     cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8",
   });
   const files = new Set(JSON.parse(output)[0].files.map((file) => file.path));
-  for (const path of ["openclaw/index.js", "openclaw/bridge.js", "openclaw.plugin.json",
+  for (const path of ["mcp/server.js", "examples/blinker-pr149.jsonl", "docs/integrations.md", "docs/evaluation.md", "openclaw/tools.js", "LICENSE", "SECURITY.md", "CONTRIBUTING.md", "openclaw/index.js", "openclaw/bridge.js", "openclaw.plugin.json",
     "octane/openclaw_bridge.py", "octane/python_calls.py", "octane/repair.py", "octane/trace_runner.py",
     "octane/native_trace.py", "octane/native_trace_runner.py",
     "octane/syntax_calls.py", "octane/runtime_profiles.py", "octane/call_plot.py", "octane/focus.py", "octane/node_trace_runner.cjs",

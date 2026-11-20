@@ -7,7 +7,7 @@ Octane registers tools for multilingual project indexing, resumable investigatio
 - OpenClaw `>=2026.5.17` (plugin APIs are experimental; validate against the Gateway version you deploy).
 - Node.js `^24.22.1` or `>=26.12.1`.
 - Python `>=3.11` on the Gateway host for native plugin tools.
-- Docker only when using isolated workspace command execution.
+- Docker for isolated workspace commands, or the configured rootless Podman adapter. See backend validation limits in the integration guide.
 
 ## Install from a local checkout
 
@@ -18,7 +18,7 @@ npm ci --omit=peer
 openclaw plugins install --link .
 ```
 
-`typebox` is installed by npm. The Gateway supplies OpenClaw itself. The plugin loads the root `octane` skill. Invoke the native workflow with `/skill octane Fix a bug.` or `/octane` where direct skill commands are available. [OpenClaw skill commands](https://docs.openclaw.ai/tools/slash-commands#skill-commands)
+Runtime dependencies are installed by npm. The Gateway supplies OpenClaw itself. The plugin loads the root `octane` skill. Invoke the native workflow with `/skill octane Fix a bug.` or `/octane` where direct skill commands are available. [OpenClaw skill commands](https://docs.openclaw.ai/tools/slash-commands#skill-commands)
 
 The following `openclaw.json` excerpt enables a repair workflow with Python Docker experiments. Use an existing absolute checkout path in `allowedProjectRoots`. Choose the exact trusted image needed for the project's checks and pull it onto the Gateway host before running them.
 
@@ -81,3 +81,9 @@ Use one trace option per `octane_workspace` action `run`. Each option uses an ap
 Use project-relative frame paths or paths inside `/workspace`. Profiler output is bounded to 512 KB. Use a direct PHP CLI probe with runtime arguments when tracing the interpreter, since PHPT can run a child process and a literal expression can be evaluated during compilation. Build debug binaries with source paths that resolve inside the workspace. Reuse the same probe, image, and trace settings for candidate runs. Validate a correction with a failing original check, a passing candidate check, and matching preservation checks.
 
 Patch comparisons and proposals flag removed literals for common HTTP security headers so the reviewer can check actual response behavior. Each paired preservation check reports whether complete stdout and stderr match. Use `strictPreservationOutput: true` to require exact matching output for deterministic checks. Leave the setting off for runners whose output includes timings or other variable text.
+
+## Optional integration configuration
+
+`languageServers` enables operator-selected Python and TypeScript LSP providers. `containerEngine` defaults to `docker`; `podman` requires rootless mode. Optional `containerRuntime: "runsc"` selects an already-configured gVisor runtime. `allowDefaultContainerUser` defaults to false on hosts without UID/GID mapping. These settings flow through the same bridge for all execution actions.
+
+The [integration guide](../docs/integrations.md) includes complete configuration, MCP launch instructions, report capture, original-test protection, mutation/property actions, bisect, evaluation, GitHub imports, telemetry, and signed provenance. Refresh the linked plugin and scan saved projects after updating. The native PIL schema advances to version 6 in place; local ledger schema 1 and legacy spelling compatibility remain supported.

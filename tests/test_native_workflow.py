@@ -185,6 +185,31 @@ class NativeWorkflowTests(unittest.TestCase):
         self.assertNotIn("unrelated later edit", comparison["patch"])
 
     @unittest.skipUnless(os.environ.get("OCTANE_TEST_DOCKER_IMAGE"), "set OCTANE_TEST_DOCKER_IMAGE to a pre-pulled approved image")
+    def test_real_docker_test_edits_cannot_weaken_the_baseline_check(self):
+        investigation = self.investigation()
+        original = self.call("workspace_create", projectId=self.project_id, mode="observation")
+        candidate = self.call("workspace_create", projectId=self.project_id, mode="experimentation")
+        self.addCleanup(self.call, "workspace_destroy", workspaceId=original["id"])
+        self.addCleanup(self.call, "workspace_destroy", workspaceId=candidate["id"])
+        focused = ["python", "-B", "-m", "unittest", "test_pipeline.Focused"]
+
+        def run(workspace, command):
+            return self.call("workspace_run", workspaceId=workspace["id"], mode=workspace["mode"],
+                             investigationId=investigation, command=command,
+                             image=os.environ["OCTANE_TEST_DOCKER_IMAGE"])
+
+        baseline = run(original, focused)
+        self.call("workspace_patch", workspaceId=candidate["id"], relativePath="test_pipeline.py",
+                  content=CHECKS.replace("self.assertEqual(calculate(0), 0)", "self.assertTrue(True)"))
+        weakened = run(candidate, focused)
+        self.assertNotEqual(baseline["returncode"], 0)
+        self.assertNotEqual(weakened["returncode"], 0, weakened)
+        self.assertIn("AssertionError", weakened["stderr"])
+        self.assertEqual(weakened["test_integrity"], baseline["test_integrity"])
+        self.call("workspace_patch", workspaceId=candidate["id"], relativePath="pipeline.py", content=FIXED)
+        self.assertEqual(run(candidate, focused)["returncode"], 0)
+
+    @unittest.skipUnless(os.environ.get("OCTANE_TEST_DOCKER_IMAGE"), "set OCTANE_TEST_DOCKER_IMAGE to a pre-pulled approved image")
     def test_real_docker_baseline_candidate_regression_and_proposal(self):
         investigation = self.investigation()
         exploration = self.call("investigation_explore", actor="explorer", projectId=self.project_id,

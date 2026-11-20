@@ -1,0 +1,8 @@
+[run]
+source = octane
+parallel = True
+patch = subprocess
+relative_files = True
+
+[report]
+show_missing = True

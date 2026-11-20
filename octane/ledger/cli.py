@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .core import CLAIM_KINDS, CLAIM_STATUSES, EVIDENCE_TYPES, Ledger, OctaneError, Project, canonical, diagnose_project, discover_root, init_project, resolve_project_root
+from .core import CLAIM_KINDS, CLAIM_STATUSES, EVIDENCE_TYPES, OctaneError, Project, diagnose_project, discover_root, init_project, resolve_project_root
 from .polygraph import build_dependency_graph
 from .source import LANGUAGE_IMPORT_SYNTAX, LANGUAGES, locate_suspects, register_language, source_inventory
 
@@ -196,7 +196,7 @@ def _load_payload(text: str) -> Dict[str, Any]:
     try:
         value = json.loads(text)
     except ValueError as error:
-        raise OctaneError("--payload must be valid JSON: " + str(error), 2, "invalid_input")
+        raise OctaneError("--payload must be valid JSON: " + str(error), 2, "invalid_input") from error
     if not isinstance(value, dict):
         raise OctaneError("--payload must decode to a JSON object", 2, "invalid_input")
     return value
@@ -215,13 +215,13 @@ def _register_language_config(root: Path, config_name: Optional[str]) -> None:
     try:
         path.relative_to(root)
     except ValueError:
-        raise OctaneError("language config must be inside the project root", 2, "invalid_input")
+        raise OctaneError("language config must be inside the project root", 2, "invalid_input") from None
     try:
         if not path.is_file() or path.stat().st_size > 1024 * 1024:
             raise OctaneError("language config must be a regular file no larger than 1 MiB", 2, "invalid_input")
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:
-        raise OctaneError("cannot read language config: " + str(error), 2, "invalid_input")
+        raise OctaneError("cannot read language config: " + str(error), 2, "invalid_input") from error
     languages = payload.get("languages") if isinstance(payload, dict) else None
     if not isinstance(languages, dict) or len(languages) > 256:
         raise OctaneError("language config must contain a languages object with at most 256 entries", 2, "invalid_input")
@@ -244,7 +244,7 @@ def _register_language_config(root: Path, config_name: Optional[str]) -> None:
         LANGUAGES.update(original_languages)
         LANGUAGE_IMPORT_SYNTAX.clear()
         LANGUAGE_IMPORT_SYNTAX.update(original_syntax)
-        raise OctaneError("invalid language config: " + str(error), 2, "invalid_input")
+        raise OctaneError("invalid language config: " + str(error), 2, "invalid_input") from error
 
 
 def _run(args: argparse.Namespace) -> Dict[str, Any]:
@@ -287,7 +287,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         try:
             return _response(source_inventory(root, args.max_files, args.max_file_bytes))
         except ValueError as error:
-            raise OctaneError(str(error), 2, "invalid_input")
+            raise OctaneError(str(error), 2, "invalid_input") from error
     if args.command == "locate":
         supplied_trace = Path(args.trace_file)
         if supplied_trace.is_absolute():
@@ -299,7 +299,7 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
         try:
             trace_path.relative_to(root)
         except ValueError:
-            raise OctaneError("trace file must be inside the project root", 2, "invalid_input")
+            raise OctaneError("trace file must be inside the project root", 2, "invalid_input") from None
         if not trace_path.is_file():
             raise OctaneError("trace file must be a regular project-local file", 2, "invalid_input")
         try:
@@ -307,19 +307,19 @@ def _run(args: argparse.Namespace) -> Dict[str, Any]:
                 raise OctaneError("trace file exceeds the 5 MiB input limit", 2, "invalid_input")
             trace_text = trace_path.read_text(encoding="utf-8", errors="replace")
         except OSError as error:
-            raise OctaneError("cannot read trace file: " + str(error), 2, "invalid_input")
+            raise OctaneError("cannot read trace file: " + str(error), 2, "invalid_input") from error
         try:
             result = locate_suspects(root, trace_text, args.query, args.limit,
                                      args.max_files, args.max_file_bytes)
         except ValueError as error:
-            raise OctaneError(str(error), 2, "invalid_input")
+            raise OctaneError(str(error), 2, "invalid_input") from error
         return _response(result)
     if args.command == "graph":
         try:
             result = build_dependency_graph(root, args.max_files, args.max_file_bytes,
                                             args.max_total_bytes, parser=args.parser)
         except ValueError as error:
-            raise OctaneError(str(error), 2, "invalid_input")
+            raise OctaneError(str(error), 2, "invalid_input") from error
         return _response(result)
     if args.command == "agent":
         if args.agent_command == "register":

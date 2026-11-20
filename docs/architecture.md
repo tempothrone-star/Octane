@@ -73,3 +73,11 @@ The portable CLI supports ledger operations and static file-level triage. Reopen
 ## Compatibility
 
 New local ledgers use `.octane/ledger.db`. Existing `.octance/octance.db` records are opened in place, preserving project identity, idempotency keys, and the anchored event history. If both ledger locations exist, the CLI reports `project_conflict`. The former script filename and agent environment variable remain aliases for existing integrations.
+
+## Native adapters and separation of concerns
+
+`openclaw/tools.js` owns the twelve public schemas shared by OpenClaw registration and `mcp/server.js`. Both call the bounded JavaScript/Python bridge. `bridge_workspace.py` groups execution operations; bridge validation helpers are in `bridge_support.py`. The native store delegates graph queries to `db_graph.py`, schema migrations to `db_schema.py`, and privacy/identity helpers to `db_support.py`, using the same transaction API throughout. Native schema 6 adds archived `source_revision`; local ledger schema 1 is separate and unchanged.
+
+The scanner separates snapshot reading, analysis, consistency verification, and atomic reconciliation. Investigation validation and adjacency construction are separate from persisted exploration. Execution separates command/trace validation, engine selection, container arguments, runtime capture, and database recording. The proposal gate separates argument, diff, run pairing, intent, report, mutation, and scope validation.
+
+`reports.py` normalizes bounded external evidence. `mutation.py`, `property_checks.py`, `bisect.py`, and `evaluation.py` delegate all project execution to `WorkspaceManager`. `source_archive.py` exports bounded safe Git trees. `github.py` uses an explicitly authenticated host CLI; `process.py` bounds integration output/deadlines and cleans POSIX child groups. `provenance.py` exports statements and optional offline signatures; signing keys remain outside tool inputs. [Integration setup and limits](integrations.md).

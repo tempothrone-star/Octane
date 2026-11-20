@@ -82,7 +82,7 @@ def analyze_python(sources, revision):
         modules[module].append(path)
         parsed[path] = (tree, table, package)
 
-        def discover(body, prefix=()):
+        def discover(body, prefix=(), path=path):
             for node in _Body(body).nodes:
                 if not isinstance(node, _SCOPES):
                     continue
@@ -112,7 +112,8 @@ def analyze_python(sources, revision):
                               for node in top)
         global_writes = _writes(top)
 
-        def visit(body, lexical, prefix=(), *, class_body=False, receiver=None):
+        def visit(body, lexical, prefix=(), *, class_body=False, receiver=None, path=path, package=package,
+                  global_imports=global_imports, global_writes=global_writes, wildcard_import=wildcard_import):
             nodes = _Body(body).nodes
             local_imports = _bindings(nodes, package)
             local_writes = _writes(nodes)

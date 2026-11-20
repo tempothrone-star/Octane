@@ -32,6 +32,25 @@ class EvidenceStore:
             self._audit(db, project_id, agent_id, "evidence.submit", "evidence", evidence_id, {"type": evidence_type})
             return dict(db.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone())
 
+    def list_evidence_ids(self, project_id: str, evidence_type: str | None = None, limit: int = 1000,
+                          requesting_agent_id: str | None = None) -> list[str]:
+        """Return bounded, stably ordered project evidence IDs, including stale records."""
+        if type(limit) is not int or not 1 <= limit <= 1000:
+            raise ValueError("evidence ID limit must be an integer from 1 to 1000")
+        if evidence_type is not None and (not isinstance(evidence_type, str) or not evidence_type.strip()):
+            raise ValueError("evidence_type must be a non-empty string")
+        with self._session() as db:
+            if db.execute("SELECT 1 FROM projects WHERE id=?", (project_id,)).fetchone() is None:
+                raise KeyError(project_id)
+            if requesting_agent_id:
+                self._require_permission(db, project_id, requesting_agent_id, "read_evidence")
+            sql, parameters = "SELECT id FROM evidence WHERE project_id=?", [project_id]
+            if evidence_type is not None:
+                sql += " AND evidence_type=?"
+                parameters.append(evidence_type)
+            rows = db.execute(sql + " ORDER BY collected_at,id LIMIT ?", [*parameters, limit])
+            return [row["id"] for row in rows]
+
     def retrieve_evidence(self, evidence_id: str, requesting_agent_id: str | None = None) -> dict[str, Any] | None:
         with self._session() as db:
             row = db.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()

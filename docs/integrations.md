@@ -178,13 +178,23 @@ Signing keys belong in operator-owned private files outside project roots (for e
 
 ### Optional keyless Sigstore workflow
 
-Export an unsigned Octane statement, then use an installed and trusted Cosign directly for keyless signing and its OIDC interaction:
+Install a trusted Cosign release **3.0.5 or newer** (the adapter enforces this minimum with `cosign version --json` and rejects unknown/prerelease builds). Keep newer security fixes applied. Export an unsigned Octane statement, then use Cosign directly for keyless signing and its OIDC interaction:
 
 ```sh
 python3 -m octane native provenance PROJECT_ID PROPOSAL_EVIDENCE_ID --database /srv/octane-state/pil.sqlite3 --output /srv/attestations/statement.json
 cosign sign-blob /srv/attestations/statement.json --bundle /srv/attestations/statement.sigstore.json
 python3 -m octane native verify-provenance /srv/attestations/statement.json --sigstore-bundle /srv/attestations/statement.sigstore.json --certificate-identity EXPECTED_EXACT_IDENTITY --certificate-oidc-issuer EXPECTED_EXACT_ISSUER --rebuild --database /srv/octane-state/pil.sqlite3
 ```
+
+Record the exact signer certificate identity and OIDC issuer alongside the bundle; obtain them from the authenticated signing identity/provider, not a claim copied from an untrusted bundle. For a GitHub Actions signer, the expected identity is the full workflow URI and ref (for example `https://github.com/OWNER/REPO/.github/workflows/release.yml@refs/tags/v0.2.1`) and the issuer is `https://token.actions.githubusercontent.com`. Interactive providers have their own exact identity and issuer; use the certificate and provider documentation to set the trust policy. Changing either policy value must cause verification to fail.
+
+Default verification may need host networking to retrieve Sigstore's authenticated trust root through TUF. Before going offline, prepare a complete signature bundle and an independently authenticated, current TrustedRoot JSON in an online trusted environment. Transfer those artifacts and record their hashes through your trusted deployment process. Then use:
+
+```sh
+python3 -m octane native verify-provenance statement.json --sigstore-bundle statement.sigstore.json --certificate-identity EXPECTED_EXACT_IDENTITY --certificate-oidc-issuer EXPECTED_EXACT_ISSUER --trusted-root /srv/trust/trusted_root.json
+```
+
+`--trusted-root` is passed to Cosign over a frozen local copy. With a complete modern bundle, this avoids the default trust-root retrieval; the offline host should independently disable outbound networking. If verification requires missing proof or trust material, fail and prepare that material online rather than using insecure-ignore flags. Trust-root freshness and rotation belong to the operator; a root file from the same untrusted source as the bundle is not an independent trust anchor. [Cosign 3.0.5 verification flags](https://github.com/sigstore/cosign/blob/v3.0.5/doc/cosign_verify-blob.md), [version command](https://github.com/sigstore/cosign/blob/v3.0.5/doc/cosign_version.md).
 
 The verification adapter uses Cosign `verify-blob` over frozen bounded copies, requires an exact identity and issuer, and retains standard trust and transparency-log verification. It provides no insecure-skip or identity-regex shortcuts. Host trust-root retrieval may use networking; project execution containers remain offline. Signing may publish certificate identity and artifact hashes to public transparency infrastructure and is an explicit operator action. The adapter has policy/transport regression tests using controlled responses; a live OIDC signing session has not been validated here. [Cosign blob signing](https://docs.sigstore.dev/cosign/signing/signing_with_blobs/), [verification](https://docs.sigstore.dev/cosign/verifying/verify/).
 

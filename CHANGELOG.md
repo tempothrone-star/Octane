@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.2.1 — 2026-11-20
+
+- Replace the five-function complexity check with a production-wide Python gate and committed non-growing baseline. New functions above 30 fail; reduced exceptions must be ratcheted down. Methods, nested functions, and repeated names are included without class-score double counting.
+- Split import recognition by language (91 -> 4), candidate resolution (47 -> 27), and mutation-evidence validation (41 -> two functions at 21). Correct C/C++ and multiline fallback import line locations discovered by new behavior tests.
+- Add a minimal protocol-speaking fake LSP peer, timeout/framing/cleanup and semantic graph tests, and an 85% language-server coverage gate. The fake-server suite measures 95% without real providers.
+- Require Cosign 3.0.5+ at verification time, test exact identity/issuer mismatch rejection, and support an operator-supplied trusted root. Document signing identity, issuer, trust-root preparation, and offline failure handling.
+- Use public `list_evidence_ids` for SARIF export with bounded project/type/permission-aware queries.
+- Retain and verify the Tree-sitter Dependabot exclusion and intentional Ruff Python 3.9 comment. Clear redundant parentheses (`UP034`) and enforce that rule; `B904` was already clean and covered by the existing B rules.
+
+Complexity comparison uses Radon 6.0.1, the same production scopes (`octane/**/*.py`, `scripts/**/*.py`), functions/methods/nested functions, and no aggregate class scores:
+
+| Snapshot | Functions | Total CC | Mean CC | Sum of (CC − 1) | Maximum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Before PR #12 (`ffbb45e`) | 411 | 3238 | 7.8783 | 2827 | 91 |
+| After PR #12 (`7ef5590`) | 447 | 3461 | 7.7427 | 3014 | 91 |
+| 0.2.1 polish | 468 | 3515 | 7.5107 | 3047 | 40 |
+
+These measurements show lower mean and peak complexity, **not a reduction in total project complexity**: the releases also add functionality and helper functions. For the matched PythonAdapter class, the earlier refactor changed 2 functions / total 69 / mean 34.5 to 7 functions / total 73 / mean 10.4286; the sum of (CC − 1) fell only from 67 to 66. Native database methods across the original file and extracted stores remained 57 / total 341 / mean 5.9825, so that split moved code by concern rather than removing decisions. The new public listing method adds one method and ten CC in this release. [Measurement method and remaining baseline](docs/polish-review.md).
+
 ## 0.2.0 — 2026-11-20
 
 ### Repair validation

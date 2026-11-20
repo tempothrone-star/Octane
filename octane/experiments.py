@@ -178,6 +178,31 @@ def _intent_evidence(db, project_id, investigation, supporting_evidence_ids):
     return intent_ids
 
 
+def _checked_mutations(db, project_id, mutants, comparison, candidate, expected_tests):
+    checked = []
+    seen = set()
+    for mutant in mutants:
+        run_id = mutant.get("run_id")
+        run = db.execute("SELECT r.*,w.snapshot_hash AS mutant_snapshot FROM execution_runs r JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=? AND r.project_id=?",
+                         (run_id, project_id)).fetchone()
+        output = json.loads(run["result_json"]) if run else {}
+        code = output.get("returncode")
+        status = ("survived" if code == 0 else "killed") if type(code) is int and 0 <= code < 125 else "inconclusive"
+        if (not run or run_id in seen or run["image_id"] != candidate["image_id"]
+                or run["investigation_id"] != candidate["investigation_id"]
+                or run["command_json"] != candidate["command_json"]
+                or run["mutant_snapshot"] != comparison["snapshot_hash"]
+                or run["before_hash"] != run["after_hash"]
+                or output.get("test_integrity") != expected_tests or _trace_settings(run) != _trace_settings(candidate)
+                or output.get("timed_out") or output.get("cleanup_warning")
+                or mutant.get("status") != status or status == "inconclusive"
+                or run["status"] != ("passed" if status == "survived" else "failed")):
+            raise ValueError("mutation executions must match recorded checks, image, snapshot, and original tests")
+        checked.append((mutant.get("operator"), status))
+        seen.add(run_id)
+    return checked
+
+
 def _mutation_evidence(db, project_id, evidence_ids, comparison, candidate, expected_tests):
     results = []
     for identifier in evidence_ids:
@@ -199,27 +224,7 @@ def _mutation_evidence(db, project_id, evidence_ids, comparison, candidate, expe
         mutants = data.get("mutants", [])
         if data.get("candidate_run_id") != candidate["id"] or not isinstance(mutants, list) or not mutants:
             raise ValueError("mutation summary needs individual recorded executions for this candidate")
-        checked = []
-        seen = set()
-        for mutant in mutants:
-            run_id = mutant.get("run_id")
-            run = db.execute("SELECT r.*,w.snapshot_hash AS mutant_snapshot FROM execution_runs r JOIN workspaces w ON w.id=r.workspace_id WHERE r.id=? AND r.project_id=?",
-                             (run_id, project_id)).fetchone()
-            output = json.loads(run["result_json"]) if run else {}
-            code = output.get("returncode")
-            status = ("survived" if code == 0 else "killed") if type(code) is int and 0 <= code < 125 else "inconclusive"
-            if (not run or run_id in seen or run["image_id"] != candidate["image_id"]
-                    or run["investigation_id"] != candidate["investigation_id"]
-                    or run["command_json"] != candidate["command_json"]
-                    or run["mutant_snapshot"] != comparison["snapshot_hash"]
-                    or run["before_hash"] != run["after_hash"]
-                    or output.get("test_integrity") != expected_tests or _trace_settings(run) != _trace_settings(candidate)
-                    or output.get("timed_out") or output.get("cleanup_warning")
-                    or mutant.get("status") != status or status == "inconclusive"
-                    or run["status"] != ("passed" if status == "survived" else "failed")):
-                raise ValueError("mutation executions must match recorded checks, image, snapshot, and original tests")
-            checked.append((mutant.get("operator"), status))
-            seen.add(run_id)
+        checked = _checked_mutations(db, project_id, mutants, comparison, candidate, expected_tests)
         reversions = [status for operator, status in checked if operator == "original-source"]
         if not reversions or any(status != "killed" for status in reversions):
             raise ValueError("mutation executions must detect the tested original-source reversions")

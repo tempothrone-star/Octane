@@ -51,7 +51,7 @@ test("npm package contains both runtimes, skill migrations, and linked documenta
     cwd: fileURLToPath(new URL("..", import.meta.url)), encoding: "utf8",
   });
   const files = new Set(JSON.parse(output)[0].files.map((file) => file.path));
-  for (const path of ["CHANGELOG.md", "docs/follow-up-review.md", "octane/host_environment.py", "octane/build_config.py", "octane/mutation_support.py", "octane/sigstore.py", "octane/sarif.py", "mcp/server.js", "examples/blinker-pr149.jsonl", "docs/integrations.md", "docs/evaluation.md", "openclaw/tools.js", "LICENSE", "SECURITY.md", "CONTRIBUTING.md", "openclaw/index.js", "openclaw/bridge.js", "openclaw.plugin.json",
+  for (const path of ["CHANGELOG.md", "docs/polish-review.md", "docs/follow-up-review.md", "octane/host_environment.py", "octane/build_config.py", "octane/mutation_support.py", "octane/sigstore.py", "octane/sarif.py", "mcp/server.js", "examples/blinker-pr149.jsonl", "docs/integrations.md", "docs/evaluation.md", "openclaw/tools.js", "LICENSE", "SECURITY.md", "CONTRIBUTING.md", "openclaw/index.js", "openclaw/bridge.js", "openclaw.plugin.json",
     "octane/openclaw_bridge.py", "octane/python_calls.py", "octane/repair.py", "octane/trace_runner.py",
     "octane/native_trace.py", "octane/native_trace_runner.py",
     "octane/syntax_calls.py", "octane/runtime_profiles.py", "octane/call_plot.py", "octane/focus.py", "octane/node_trace_runner.cjs",

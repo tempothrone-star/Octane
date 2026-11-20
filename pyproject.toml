@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octane-pil"
-version = "0.2.0"
+version = "0.2.1"
 description = "Evidence-driven project intelligence, function tracing, and validated repair workflows for OpenClaw and MCP"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -36,4 +36,4 @@ target-version = "py39"
 exclude = ["build", "node_modules"]
 
 [tool.ruff.lint]
-select = ["F", "B", "S102", "S306", "S307"]
+select = ["F", "B", "S102", "S306", "S307", "B904", "UP034"]

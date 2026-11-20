@@ -1,0 +1,14 @@
+{
+  "limit": 30,
+  "exceptions": {
+    "octane/cli.py:main": 37,
+    "octane/exploration.py:Tentacle.explore": 40,
+    "octane/investigation.py:InvestigationWorkflow.explore": 38,
+    "octane/language_server.py:semantic_calls": 31,
+    "octane/ledger/core.py:Project.brief": 35,
+    "octane/ledger/polygraph.py:_tokens": 36,
+    "octane/ledger/polygraph.py:build_dependency_graph": 33,
+    "octane/ledger/source.py:locate_suspects": 35,
+    "octane/python_calls.py:analyze_python.<locals>.visit": 40
+  }
+}

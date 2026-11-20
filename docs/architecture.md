@@ -85,3 +85,7 @@ The scanner separates snapshot reading, analysis, consistency verification, and 
 ## Follow-up module boundaries
 
 `db_evidence.py` and `db_investigations.py` join `db_graph.py` as mixins over the same SQLite sessions and nested transactions. `bridge_evidence.py` groups evidence/memory operations. `build_config.py` classifies and reviews explicit build edits; `mutation_support.py` reports per-language availability and existing-grammar JS/TS operators. `host_environment.py` owns environment/command boundaries. `sarif.py` exports attributed findings. `sigstore.py` verifies externally signed bundles through an operator-installed Cosign; signing/OIDC stays outside model tools. New provenance predicate v2 binds runtime results and observations and rebuilds from the ledger; existing database schema 6 and ledger schema 1 remain unchanged.
+
+## Global enforcement and import decomposition
+
+`scripts/check_complexity.py` now measures production Python rather than five selected functions; its reviewed baseline is committed in `scripts/complexity-baseline.json`. Language-specific import recognition and candidate-path helpers keep the dispatchers bounded. The public `EvidenceStore.list_evidence_ids` API isolates SARIF from transaction internals. Protocol fixtures cover LSP callbacks, source edges, and failure handling; they are test peers, not additional host integrations. See [0.2.1 measurements](polish-review.md).

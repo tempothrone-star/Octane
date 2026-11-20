@@ -48,7 +48,7 @@ class LanguageServer:
     def _read(self):
         try:
             total = 0
-            while self.process.poll() is None:
+            while True:
                 headers = {}
                 while True:
                     line = self.process.stdout.readline(8193)

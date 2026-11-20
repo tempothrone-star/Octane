@@ -59,3 +59,7 @@ SARIF export preserves recorded verification/stale status. Language servers rece
 The complexity gate now covers all production Python, with a non-growing baseline for existing functions above 30. Average and maximum scores fall; total project complexity does not. The [polish review](polish-review.md) and changelog report measured values and remaining debt.
 
 A minimal fake LSP peer exercises host transport and semantic paths without external providers, and CI enforces 85% language-server coverage. SARIF lists IDs through a public, bounded store API. Cosign verification requires 3.0.5+ and can take an operator-authenticated local TrustedRoot JSON; complete offline bundles and independently prepared trust material are required. Live keyless signing and Podman/runsc deployment testing remain separate.
+
+## 0.3.0 diagnosis and final validation
+
+The [accuracy workflow](accuracy-workflow.md) documents ordered Python numeric traces, language-neutral imported spectra/ordered traces, flaky-test exclusion, analyzer attribution, low-confidence syntax patterns, test ordering, operator-owned holdout checks, current-proposal ranking, and exact paired-median optimization decisions. The same twelve tools expose them. The executed seeded harness checks mechanics; broad real-world accuracy and the secondary research proposals remain unmeasured or unimplemented.

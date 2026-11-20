@@ -85,6 +85,8 @@ def main() -> None:
         command.add_argument("--workspace-root", type=Path, required=True)
         command.add_argument("--container-engine", choices=("docker", "podman"), default="docker")
         command.add_argument("--container-runtime", choices=("runsc",))
+    from .diagnostic_cli import add_commands
+    add_commands(commands)
     demo = commands.add_parser("demo", help="run a disposable database and source-analysis demonstration")
     demo.add_argument("--database", type=Path, help="retain demo database at this path")
     args = parser.parse_args()
@@ -110,16 +112,16 @@ def main() -> None:
             print(json.dumps(run_demo(ProjectIntelligence(Path(temp) / "pil.sqlite3")), indent=2))
         return
     intelligence = ProjectIntelligence(args.database if getattr(args, "database", None) else ".octane/pil.sqlite3")
-    if args.command == "init":
+    if args.command in {"diagnose", "holdout", "benchmark"}:
+        from .diagnostic_cli import run_command
+        print(json.dumps(run_command(intelligence, args), indent=2))
+    elif args.command == "init":
         if not args.root.is_dir():
             parser.error(f"project root is not a directory: {args.root}")
         project = intelligence.create_project(args.name or args.root.name, args.root)
         print(json.dumps(project, indent=2))
     elif args.command == "scan":
-        project = intelligence.get_project(args.project_id)
-        if project is None:
-            parser.error(f"unknown project: {args.project_id}")
-        print(json.dumps(ProjectScanner().scan(intelligence, args.project_id), indent=2))
+        print(json.dumps(_scan_command(intelligence, args, parser), indent=2))
     elif args.command == "import-report":
         actor = intelligence.get_or_register_agent(args.project_id, "report-importer", "report observer", [], ["write_evidence"])
         print(json.dumps(import_report(intelligence, args.project_id, actor["id"], args.path, args.format), indent=2))
@@ -172,6 +174,12 @@ def main() -> None:
         print(json.dumps(result, indent=2))
     else:
         print(json.dumps(run_demo(intelligence), indent=2))
+
+
+def _scan_command(intelligence, args, parser):
+    if intelligence.get_project(args.project_id) is None:
+        parser.error(f"unknown project: {args.project_id}")
+    return ProjectScanner().scan(intelligence, args.project_id)
 
 
 def run_demo(intelligence: ProjectIntelligence) -> dict:

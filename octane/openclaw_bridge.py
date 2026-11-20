@@ -34,6 +34,7 @@ _PERMISSIONS = {
     "read_investigation": ("read_investigation",),
     "investigate": ("investigate",),
     "checkpoint_investigation": ("checkpoint_investigation",),
+    "diagnose": ("read_evidence", "write_evidence", "investigate"),
     "workflow": ("read_graph", "read_evidence", "write_evidence", "read_investigation", "checkpoint_investigation"),
 }
 _AGENT_ROLES = {
@@ -53,7 +54,7 @@ class OctaneBridge(WorkspaceOperations, EvidenceOperations):
     def __init__(self, database: str, allowed_roots: list[str], workspace_root: str,
                  allowed_images: list[str] | None = None, allow_agent_provisioning: bool = False,
                  allow_default_container_user: bool = False, language_servers: dict | None = None,
-                 container_engine: str = "docker", container_runtime: str | None = None):
+                 container_engine: str = "docker", container_runtime: str | None = None, holdout_policy: str | None = None):
         if not allowed_roots:
             raise BridgeError("Configure at least one allowedProjectRoots entry before using Octane")
         self.allowed_roots = []
@@ -71,6 +72,7 @@ class OctaneBridge(WorkspaceOperations, EvidenceOperations):
         if language_servers is not None and not isinstance(language_servers, dict):
             raise BridgeError("languageServers must map languages to explicit server commands")
         self.language_servers = language_servers or {}
+        self.holdout_policy = holdout_policy
         self.container_engine = container_engine
         self.container_runtime = container_runtime
         self.runtime_context = ContextVar("runtime_context", default=None)
@@ -129,6 +131,13 @@ class OctaneBridge(WorkspaceOperations, EvidenceOperations):
             return handler(params)
         finally:
             self.runtime_context.reset(token)
+
+    def _op_diagnose(self, p: dict[str, Any]) -> dict[str, Any]:
+        from .diagnostics import diagnose
+        project_id = _required(p, "projectId", str)
+        self._project(project_id)
+        return diagnose(self.intelligence, project_id, self._actor(project_id, "diagnose"),
+                        _required(p, "analysisKind", str), p.get("evidenceIds", []), p.get("analysisOptions"))
 
     def _op_project_list(self, p: dict[str, Any]) -> list[dict[str, Any]]:
         result = []
@@ -564,6 +573,7 @@ def main() -> None:
     parser.add_argument("--language-servers", default="{}")
     parser.add_argument("--container-engine", choices=("docker", "podman"), default="docker")
     parser.add_argument("--container-runtime", choices=("runsc",))
+    parser.add_argument("--holdout-policy")
     args = parser.parse_args()
     raw = sys.stdin.buffer.read(_MAX_REQUEST_BYTES + 1)
     if len(raw) > _MAX_REQUEST_BYTES:
@@ -574,7 +584,7 @@ def main() -> None:
             result = OctaneBridge(args.database, args.allowed_root, args.workspace_root,
                                    args.allowed_image, args.allow_agent_provisioning,
                                    args.allow_default_container_user, json.loads(args.language_servers),
-                                   args.container_engine, args.container_runtime).dispatch(request)
+                                   args.container_engine, args.container_runtime, args.holdout_policy).dispatch(request)
             response = {"ok": True, "result": result}
         except Exception as exc:
             response = {"ok": False, "error": {"type": type(exc).__name__, "message": str(exc)}}

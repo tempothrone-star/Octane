@@ -46,6 +46,19 @@ test("MCP exposes the shared twelve tools and enforces bridge and tool policies"
   const created = await client.callTool({
     name: "octane_project", arguments: { action: "create", root, name: "fixture" },
   });
+  const diagnosticEvidence = await client.callTool({ name: "octane_evidence", arguments: {
+    action: "add", projectId: created.structuredContent.result.id, evidenceType: "structured_report",
+    description: "Controlled per-test coverage", payload: {test_spectra: [
+      {id: "fail", status: "failed", coverage: {"app.py": [2]}},
+      {id: "pass", status: "passed", coverage: {"app.py": [1]}},
+    ]},
+  }});
+  const diagnosis = await client.callTool({name: "octane_investigation", arguments: {
+    action: "analyze", projectId: created.structuredContent.result.id, analysisKind: "localize",
+    evidenceIds: [diagnosticEvidence.structuredContent.result.id],
+  }});
+  assert.equal(diagnosis.structuredContent.result.result.suspects[0].line, 2);
+  assert.equal(diagnosis.structuredContent.result.model_calls, false);
   const workspace = await client.callTool({
     name: "octane_workspace", arguments: {
       action: "create", projectId: created.structuredContent.result.id, mode: "observation",

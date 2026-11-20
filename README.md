@@ -8,6 +8,8 @@ Release 0.2.0 adds explicit build-change review, JS/TS mutation support, isolate
 
 The 0.2.1 [polish follow-up](docs/polish-review.md) extends complexity enforcement across production Python, adds fake-provider coverage, and tightens Cosign compatibility and offline trust handling.
 
+Release 0.3.0 adds ordered trace comparison, per-test fault localization, analyzer fusion, coverage-based test ordering, operator-owned holdout checks, proposal ranking, and a statistical optimization gate. See the [accuracy workflow and measured limits](docs/accuracy-workflow.md).
+
 ## Install
 
 Use OpenClaw 2026.5.17+, Node.js `^24.22.1` or `>=26.12.1`, and Python 3.11+ on the Gateway host. Docker is used for isolated execution; rootless Podman and configured gVisor adapters are also available.

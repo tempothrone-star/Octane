@@ -37,7 +37,7 @@ export function createServer(config) {
   const enabled = tools.filter((tool) => allowed.includes(tool.name));
   const ajv = new Ajv({ strict: false, allErrors: true });
   const validators = new Map(enabled.map((tool) => [tool.name, ajv.compile(tool.parameters)]));
-  const server = new Server({ name: "octane", version: "0.2.1" }, { capabilities: { tools: {} } });
+  const server = new Server({ name: "octane", version: "0.3.0" }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: enabled.map((tool) => ({
       name: tool.name, description: tool.description, inputSchema: tool.parameters,

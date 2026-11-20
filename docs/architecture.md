@@ -89,3 +89,7 @@ The scanner separates snapshot reading, analysis, consistency verification, and 
 ## Global enforcement and import decomposition
 
 `scripts/check_complexity.py` now measures production Python rather than five selected functions; its reviewed baseline is committed in `scripts/complexity-baseline.json`. Language-specific import recognition and candidate-path helpers keep the dispatchers bounded. The public `EvidenceStore.list_evidence_ids` API isolates SARIF from transaction internals. Protocol fixtures cover LSP callbacks, source edges, and failure handling; they are test peers, not additional host integrations. See [0.2.1 measurements](polish-review.md).
+
+## Diagnosis layer (0.3.0)
+
+`diagnostics.py` links current project-scoped evidence to deterministic functions in `localization.py`, `finding_fusion.py`, `bug_patterns.py`, and `patch_ranking.py`. `trace_events.py` validates ordered numeric events. `holdout.py` loads only operator configuration; private command output is withheld inside `WorkspaceManager` before persistence. `performance.py` consumes recorded runs rather than agent-supplied pass/fail or timing claims. OpenClaw and MCP share the existing schemas; native CLI registration stays in `diagnostic_cli.py`. [Accuracy workflow](accuracy-workflow.md).

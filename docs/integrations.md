@@ -226,3 +226,7 @@ The November 20 validation replayed one real historical Blinker fix: [maintainer
 - [Git bisect completion implementation](https://github.com/git/git/blob/master/bisect.c).
 
 - [Git 2.32 configuration environment changes](https://github.com/git/git/blob/v2.32.0/Documentation/RelNotes/2.32.0.txt).
+
+## Evidence-driven diagnosis (0.3.0)
+
+See the [accuracy workflow](accuracy-workflow.md) for `spectrum` and `ordered-trace` import schemas, SARIF tool attribution/fusion, existing-tool analysis actions, private operator holdout policy, candidate ranking and recorded performance comparison. Imported reports remain unverified. This extension does not install analyzer binaries or infer per-test coverage from aggregate reports.

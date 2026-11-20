@@ -91,3 +91,7 @@ The [integration guide](../docs/integrations.md) includes complete configuration
 ## 0.2.0 follow-up
 
 Language server definitions accept `environmentAllowlist` for explicitly named host variables; defaults omit credential variables and retain bounded stderr diagnostics. Build-file edits require `allowBuildChanges` and `buildChangesRationale` on each candidate run and on `propose`, with changed-key evidence and protected recognized test settings. Mutation support is explicit per source language; JS/TS requires the existing parser extra, and unsupported languages never receive a passing score. MCP client attribution, ledger rebuild verification, SARIF export, and optional external Cosign verification are detailed in the [integration guide](../docs/integrations.md). Package metadata is version 0.2.0.
+
+## Diagnosis and private final checks
+
+The existing `octane_investigation` tool exposes `analyze` actions for trace comparison, line localization, analyzer fusion, test ordering, patterns and patch ranking. The existing workspace tool adds `benchmark`. Configure optional `holdoutPolicy` as an absolute operator-owned JSON file outside all allowed project and workspace roots to require withheld checks for every proposal. Omit it to retain the normal gate without claiming hidden-test validation. [Configuration, schemas and limits](../docs/accuracy-workflow.md).

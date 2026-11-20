@@ -1,4 +1,4 @@
-# Accurate diagnosis and final validation (0.3.0)
+# Accurate diagnosis and final validation (1.0.0)
 
 The engine verifies; the agent proposes. These additions keep model calls out of Octane's core and keep the same twelve OpenClaw/MCP tools. They implement an initial workflow across the six priorities in the November 20 enhancement proposal; the remaining research items are listed below. They do not make a score a proof that behavior is unintended.
 

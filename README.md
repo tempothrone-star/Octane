@@ -2,6 +2,14 @@
 
 Octane helps an OpenClaw agent understand a project, trace behavior through functions and imports, and make small bug fixes supported by tests. It combines source analysis, runtime traces, persistent investigation records, and a local evidence CLI in one plugin and one `octane` skill.
 
+### Development and AI Assistance
+
+Octane is developed with AI-assisted programming. Its architecture, goals, and development direction are guided by the project maintainer.
+
+AI-generated implementations are subject to testing and review. The project is under active development, and not all components have been validated against large-scale production repositories.
+
+Bug reports, reproducible test cases, code reviews, and contributions are welcome.
+
 Ask **“Fix a bug.”** The workflow finds a baseline check, looks for evidence of intended behavior, reproduces the defect, and follows the affected path before editing. It then reruns the reproduction and checks that neighboring behavior still works. The OpenClaw agent supplies reasoning through its configured model provider.
 
 Release 0.2.0 adds explicit build-change review, JS/TS mutation support, isolated host integration environments, distinct MCP client attribution, ledger-backed signature verification, and SARIF export. See the [changelog](CHANGELOG.md) and [follow-up review](docs/follow-up-review.md).

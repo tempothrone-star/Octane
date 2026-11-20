@@ -97,7 +97,7 @@ def render_doc(name: str, text: str, files: dict[str, str]) -> tuple[str, str]:
             # Markdown line links are translated to source browser line IDs.
             fragment = re.sub(r'^L(\d+)$', r'L-\1', parts.fragment) if not target.endswith('.md') else parts.fragment
         else:
-            path = REPO + '/blob/main/' + quote(target, safe='/')
+            path = REPO + '/blob/' + REVISION + '/' + quote(target, safe='/')
             fragment = parts.fragment
         return f'{attr}="{html.escape(urlunsplit(("", "", path, parts.query, fragment)), quote=True)}"'
 
@@ -106,10 +106,11 @@ def render_doc(name: str, text: str, files: dict[str, str]) -> tuple[str, str]:
 
 
 def build(destination: Path) -> None:
-    global VERSION
+    global VERSION, REVISION
     files = public_files()
     VERSION = json.loads(files['package.json'])['version']
     revision = git('rev-parse', 'HEAD').decode().strip()
+    REVISION = revision
     destination.mkdir(parents=True, exist_ok=True)
     (destination / 'assets').mkdir(exist_ok=True)
     for path in ASSETS.iterdir():
@@ -128,7 +129,7 @@ def build(destination: Path) -> None:
     doc_nav += '</nav></aside>'
     for name in docs:
         body, _ = render_doc(name, files[name], files)
-        page = f'<div class="breadcrumb">Documentation / {html.escape(name)}</div><article class="prose">{body}</article><div class="page-links"><a href="{source_url(name)}">View document source</a><a href="{REPO}/blob/main/{quote(name, safe="/")}">View on GitHub</a></div>'
+        page = f'<div class="breadcrumb">Documentation / {html.escape(name)}</div><article class="prose">{body}</article><div class="page-links"><a href="{source_url(name)}">View document source</a><a href="{REPO}/blob/{revision}/{quote(name, safe="/")}">View on GitHub</a></div>'
         out = destination / doc_url(name).lstrip('/')
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(layout(name, page, section='Documentation', side=doc_nav), encoding='utf-8')

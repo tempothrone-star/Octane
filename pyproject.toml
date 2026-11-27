@@ -21,7 +21,7 @@ provenance = ["cryptography>=46,<51"]
 testing = ["hypothesis>=6.140,<7"]
 # This release bundles grammars in wheels, including Python 3.13/3.14.
 # 1.x fetches grammars at runtime; keep analysis offline until that loader is reviewed.
-ast = ["tree-sitter-language-pack==0.13.0", "tree-sitter==0.26.1"]
+ast = ["tree-sitter-language-pack==0.13.0", "tree-sitter==0.27.0"]
 
 [tool.setuptools.packages.find]
 include = ["octane*"]
